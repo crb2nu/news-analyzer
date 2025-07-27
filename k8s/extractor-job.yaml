@@ -1,0 +1,151 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-extractor
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: extractor
+spec:
+  # Run every hour to process any new content
+  schedule: "15 * * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 10
+  startingDeadlineSeconds: 1800
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: extractor
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: extractor
+            image: harbor.lan/news-analyzer/extractor:latest
+            imagePullPolicy: Always
+            command:
+            - python
+            - -m
+            - extractor.processor
+            args:
+            - --date
+            - $(shell date +%Y-%m-%d)
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: MINIO_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: MINIO_ENDPOINT
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: MINIO_SECRET_KEY
+            - name: MINIO_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: MINIO_BUCKET
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: LOG_LEVEL
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
+                cpu: "1000m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: news-analyzer-extractor-manual
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: extractor
+    type: manual
+spec:
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: extractor
+        type: manual
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: extractor
+        image: harbor.lan/news-analyzer/extractor:latest
+        imagePullPolicy: Always
+        command:
+        - python
+        - -m
+        - extractor.processor
+        args:
+        - --date
+        - $(shell date +%Y-%m-%d)
+        - --force
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: DATABASE_URL
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: MINIO_ENDPOINT
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: MINIO_SECRET_KEY
+        - name: MINIO_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: MINIO_BUCKET
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000

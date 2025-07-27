@@ -1,0 +1,196 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-scraper
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: scraper
+spec:
+  # Run daily at 6:00 AM EST (10:00 UTC)
+  schedule: "0 10 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: scraper
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: scraper
+            image: harbor.lan/news-analyzer/scraper:latest
+            imagePullPolicy: Always
+            command:
+            - python
+            - -m
+            - scraper.downloader
+            args:
+            - --date
+            - $(shell date +%Y-%m-%d)
+            env:
+            - name: EEDITION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EEDITION_USER
+            - name: EEDITION_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EEDITION_PASS
+            - name: SMARTPROXY_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: SMARTPROXY_USER
+            - name: SMARTPROXY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: SMARTPROXY_PASS
+            - name: SMARTPROXY_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: SMARTPROXY_HOST
+            - name: MINIO_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: MINIO_ENDPOINT
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: MINIO_SECRET_KEY
+            - name: MINIO_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: MINIO_BUCKET
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "250m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
+            volumeMounts:
+            - name: session-storage
+              mountPath: /app/storage
+          volumes:
+          - name: session-storage
+            persistentVolumeClaim:
+              claimName: scraper-session-pvc
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scraper-session-pvc
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: scraper
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-auth-refresh
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: auth-refresh
+spec:
+  # Run weekly on Sundays at 5:00 AM EST (9:00 UTC)
+  schedule: "0 9 * * 0"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: auth-refresh
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: auth-refresh
+            image: harbor.lan/news-analyzer/scraper:latest
+            imagePullPolicy: Always
+            command:
+            - python
+            - -m
+            - scraper.login
+            args:
+            - --storage
+            - /app/storage/storage_state.json
+            env:
+            - name: EEDITION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EEDITION_USER
+            - name: EEDITION_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EEDITION_PASS
+            - name: SMARTPROXY_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: SMARTPROXY_USER
+            - name: SMARTPROXY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: SMARTPROXY_PASS
+            - name: SMARTPROXY_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: SMARTPROXY_HOST
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"
+            volumeMounts:
+            - name: session-storage
+              mountPath: /app/storage
+          volumes:
+          - name: session-storage
+            persistentVolumeClaim:
+              claimName: scraper-session-pvc
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000

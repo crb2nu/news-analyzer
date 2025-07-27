@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: news-analyzer-config
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+data:
+  # SmartProxy configuration
+  SMARTPROXY_HOST: "us.smartproxy.com"
+  
+  # MinIO configuration
+  MINIO_ENDPOINT: "minio.lan:9000"
+  MINIO_BUCKET: "news-cache"
+  
+  # Database configuration
+  DATABASE_HOST: "postgres.lan"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "news_analyzer"
+  
+  # Email configuration
+  EMAIL_SMTP_HOST: "smtp.sendgrid.net"
+  EMAIL_SMTP_PORT: "587"
+  EMAIL_FROM: "news-digest@yourdomain.com"
+  
+  # Application settings
+  LOG_LEVEL: "INFO"
+  PROXY_ROTATION_ENABLED: "true"
+  CACHE_RETENTION_DAYS: "7"
+  
+  # OpenAI configuration
+  OPENAI_MODEL: "gpt-4o-mini"
+  OPENAI_MAX_TOKENS: "1000"
