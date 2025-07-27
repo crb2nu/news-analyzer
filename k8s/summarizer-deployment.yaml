@@ -1,0 +1,202 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-analyzer-summarizer
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: summarizer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: news-analyzer
+      component: summarizer
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: summarizer
+    spec:
+      containers:
+      - name: summarizer
+        image: harbor.lan/news-analyzer/summarizer:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: DATABASE_URL
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: OPENAI_API_KEY
+        - name: OPENAI_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: OPENAI_MODEL
+        - name: OPENAI_MAX_TOKENS
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: OPENAI_MAX_TOKENS
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: news-analyzer-summarizer-service
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: summarizer
+spec:
+  selector:
+    app: news-analyzer
+    component: summarizer
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-summarizer-batch
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: summarizer-batch
+spec:
+  # Run every 30 minutes to process new articles
+  schedule: "*/30 * * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 1800
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: summarizer-batch
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: summarizer-batch
+            image: harbor.lan/news-analyzer/summarizer:latest
+            imagePullPolicy: Always
+            command:
+            - python
+            - -c
+            - |
+              import asyncio
+              import requests
+              import json
+              import logging
+              
+              logging.basicConfig(level=logging.INFO)
+              logger = logging.getLogger(__name__)
+              
+              async def main():
+                  try:
+                      # Get pending articles
+                      response = requests.get("http://news-analyzer-summarizer-service:8000/articles/pending?limit=50")
+                      response.raise_for_status()
+                      data = response.json()
+                      
+                      if data['count'] == 0:
+                          logger.info("No pending articles to summarize")
+                          return
+                      
+                      article_ids = [article['id'] for article in data['articles']]
+                      logger.info(f"Processing {len(article_ids)} articles")
+                      
+                      # Submit batch summarization
+                      batch_request = {
+                          "article_ids": article_ids,
+                          "force_refresh": False
+                      }
+                      
+                      response = requests.post(
+                          "http://news-analyzer-summarizer-service:8000/summarize/batch",
+                          json=batch_request
+                      )
+                      response.raise_for_status()
+                      
+                      result = response.json()
+                      logger.info(f"Batch summarization complete: {result['successful_summaries']} successful, {result['failed_summaries']} failed")
+                      
+                  except Exception as e:
+                      logger.error(f"Batch summarization failed: {str(e)}")
+                      exit(1)
+              
+              asyncio.run(main())
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: OPENAI_API_KEY
+            - name: OPENAI_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: OPENAI_MODEL
+            - name: OPENAI_MAX_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: OPENAI_MAX_TOKENS
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000

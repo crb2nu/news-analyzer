@@ -438,6 +438,49 @@ class DatabaseManager:
         async with self.get_connection() as conn:
             await conn.execute(sql, status, article_id)
     
+    async def store_summary(self, 
+                          article_id: int, 
+                          summary: str, 
+                          key_points: List[str], 
+                          sentiment: Optional[str] = None,
+                          confidence_score: float = 0.8,
+                          tokens_used: int = 0,
+                          processing_time_ms: int = 0,
+                          model_used: str = "gpt-4o-mini") -> int:
+        """Store article summary in database."""
+        sql = """
+        INSERT INTO summaries (
+            article_id, summary_text, summary_type, model_used, 
+            tokens_used, generation_time_ms
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (article_id, summary_type) 
+        DO UPDATE SET
+            summary_text = EXCLUDED.summary_text,
+            model_used = EXCLUDED.model_used,
+            tokens_used = EXCLUDED.tokens_used,
+            generation_time_ms = EXCLUDED.generation_time_ms
+        RETURNING id
+        """
+        
+        # Combine summary with key points and sentiment
+        full_summary = summary
+        if key_points:
+            full_summary += "\n\nKey Points:\n" + "\n".join(f"• {point}" for point in key_points)
+        if sentiment:
+            full_summary += f"\n\nSentiment: {sentiment}"
+        
+        async with self.get_connection() as conn:
+            result = await conn.fetchrow(
+                sql, 
+                article_id, 
+                full_summary, 
+                'brief', 
+                model_used, 
+                tokens_used, 
+                processing_time_ms
+            )
+            return result['id']
+    
     async def get_processing_stats(self, days: int = 7) -> Dict:
         """Get processing statistics for the last N days."""
         sql = """

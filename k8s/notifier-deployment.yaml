@@ -1,0 +1,169 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-notifier-daily
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: notifier-daily
+spec:
+  # Run daily at 7:00 AM EST (11:00 UTC) to send digest
+  schedule: "0 11 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: notifier-daily
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: notifier-daily
+            image: harbor.lan/news-analyzer/notifier:latest
+            imagePullPolicy: Always
+            command:
+            - python
+            - -m
+            - notifier.service
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: EMAIL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EMAIL_API_KEY
+            - name: EMAIL_FROM
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: EMAIL_FROM
+            - name: EMAIL_TO
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EMAIL_TO
+            - name: EMAIL_SMTP_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: EMAIL_SMTP_HOST
+            - name: EMAIL_SMTP_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: EMAIL_SMTP_PORT
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: SLACK_WEBHOOK_URL
+                  optional: true
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: LOG_LEVEL
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: news-analyzer-notifier-manual
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: notifier-manual
+    type: manual
+spec:
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: notifier-manual
+        type: manual
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: notifier-manual
+        image: harbor.lan/news-analyzer/notifier:latest
+        imagePullPolicy: Always
+        command:
+        - python
+        - -m
+        - notifier.service
+        args:
+        - --date
+        - $(shell date +%Y-%m-%d)
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: DATABASE_URL
+        - name: EMAIL_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: EMAIL_API_KEY
+        - name: EMAIL_FROM
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: EMAIL_FROM
+        - name: EMAIL_TO
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: EMAIL_TO
+        - name: EMAIL_SMTP_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: EMAIL_SMTP_HOST
+        - name: EMAIL_SMTP_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: EMAIL_SMTP_PORT
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: SLACK_WEBHOOK_URL
+              optional: true
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
