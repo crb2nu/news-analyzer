@@ -16,7 +16,7 @@ The News Analyzer is an automated system that:
 - **PDF Processing**: pdfminer-six
 - **HTML Extraction**: trafilatura
 - **AI Summarization**: OpenAI GPT-4
-- **Email Service**: SendGrid or Amazon SES
+- **Push Notifications**: ntfy (self-hosted, iPhone/Android support)
 - **Database**: PostgreSQL
 - **Object Storage**: MinIO
 - **Container Orchestration**: Kubernetes (K3s)
@@ -49,7 +49,7 @@ graph TB
             scraperPod[Scraper Pod<br/>w/ SmartProxy]
             extractorJob[Extractor Job<br/>PDF/HTML → Text]
             summarizerJob[Summarizer Job<br/>OpenAI API]
-            emailJob[Email Job<br/>SendGrid/SES]
+            notifierJob[Notifier Job<br/>ntfy Push]
         end
         
         subgraph "Monitoring"
@@ -63,7 +63,7 @@ graph TB
         swva[SW Virginia Today<br/>E-Edition]
         smartproxy[SmartProxy<br/>Network]
         openai[OpenAI API]
-        sendgrid[SendGrid/SES]
+        ntfy[ntfy Server<br/>Push Notifications]
     end
     
     swva -.-> smartproxy
@@ -78,8 +78,8 @@ graph TB
     postgres --> summarizerJob
     summarizerJob --> openai
     summarizerJob --> postgres
-    postgres --> emailJob
-    emailJob --> sendgrid
+    postgres --> notifierJob
+    notifierJob --> ntfy
     
     scraperPod --> loki
     extractorJob --> loki
@@ -128,16 +128,17 @@ graph TB
 4. Store summaries linked to articles
 ```
 
-### 5. Email Digest Generation
+### 5. Push Notification Delivery
 ```
 1. Query today's summaries
 2. Group by section (Local, Sports, etc.)
-3. Generate HTML email:
-   - Clean, mobile-friendly design
-   - Section headers
-   - Article summaries with "Read More" links
-   - Daily highlights at top
-4. Send via SendGrid/SES at 7:00 AM
+3. Generate notification payload:
+   - Title with article count
+   - Top 3 article summaries
+   - Click action to full e-edition
+   - Optional full digest attachment
+4. Send via ntfy at 7:00 AM
+5. iPhone/Android apps receive push notification
 ```
 
 ## Database Schema
@@ -208,19 +209,18 @@ spec:
                 cpu: "1000m"
 ```
 
-### Email Service Configuration
+### Notification Service Configuration
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: email-config
+  name: notification-config
 data:
-  SMTP_HOST: "smtp.sendgrid.net"
-  SMTP_PORT: "587"
-  FROM_EMAIL: "news-digest@yourdomain.com"
-  FROM_NAME: "SW Virginia News Digest"
-  RECIPIENT_EMAIL: "your-email@example.com"
-  EMAIL_SUBJECT_TEMPLATE: "Your Daily News Digest - {date}"
+  NTFY_URL: "http://ntfy-service.news-analyzer.svc.cluster.local"
+  NTFY_TOPIC: "news-digest"
+  NTFY_PRIORITY: "3"
+  NTFY_ATTACH_FULL: "false"
+  NOTIFICATION_TITLE: "SW Virginia News - {count} new articles"
 ```
 
 ## Security Considerations
@@ -246,14 +246,14 @@ data:
 - Scraper success rate
 - Articles extracted per day
 - OpenAI token usage
-- Email delivery status
+- Push notification delivery status
 - Storage utilization
 
 ### Alert Conditions
 - Scraper fails 3 consecutive days
 - Token usage exceeds budget
 - Storage > 80% capacity
-- Email delivery failures
+- Push notification delivery failures
 
 ## Cost Optimization
 

@@ -17,21 +17,25 @@ class Settings(BaseSettings):
     
     # OpenAI configuration
     openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_max_tokens: str = "1000"
     
-    # Email configuration
-    email_smtp_host: str = "smtp.sendgrid.net"
-    email_smtp_port: int = 587
-    email_api_key: str = ""
-    email_from: str = "news-digest@yourdomain.com"
-    email_to: str = ""
+    # Ntfy configuration (replacing email)
+    ntfy_url: str = "http://ntfy-service.news-analyzer.svc.cluster.local"
+    ntfy_topic: str = "news-digest"
+    ntfy_token: str = ""  # Optional auth token
+    ntfy_attach_full: bool = False  # Whether to attach full digest as file
+    
+    # Slack configuration (optional)
+    slack_webhook_url: str = ""
     
     # Database configuration
-    database_url: str = "postgresql://user:pass@localhost/news_analyzer"
+    database_url: str = "postgresql://news_analyzer:changeme-strong-password-here@postgres-service:5432/news_analyzer"
     
     # Storage configuration
-    minio_endpoint: str = "minio.lan:9000"
-    minio_access_key: str = ""
-    minio_secret_key: str = ""
+    minio_endpoint: str = "minio-service.news-analyzer.svc.cluster.local"
+    minio_access_key: str = "news-analyzer"
+    minio_secret_key: str = "changeme-strong-secret-key"
     minio_bucket: str = "news-cache"
 
     class Config:

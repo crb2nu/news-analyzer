@@ -1,0 +1,219 @@
+apiVersion: minio.min.io/v2
+kind: Tenant
+metadata:
+  name: news-analyzer-minio
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+spec:
+  ## Number of MinIO servers/pods in this deployment
+  ## For standalone mode, supply 1. For distributed mode, supply 4 or more.
+  servers: 1
+  ## Number of volumes attached per MinIO instance
+  volumesPerServer: 1
+  ## Size of each volume
+  size: 50Gi
+  ## MinIO container image
+  image: quay.io/minio/minio:latest
+  ## Secret with credentials to be used by MinIO instance
+  credsSecret:
+    name: minio-creds-secret
+  ## Pool configuration for servers
+  pools:
+    - name: pool-0
+      servers: 1
+      volumesPerServer: 1
+      volumeClaimTemplate:
+        metadata:
+          name: data
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 50Gi
+          storageClassName: local-path
+  ## MinIO features
+  features:
+    enableSFTP: false
+  ## Request autoCert from Kubernetes cluster
+  requestAutoCert: false
+  ## Mount path for MinIO volume (PV)
+  mountPath: /export
+  ## Subpath inside mount path for MinIO data
+  subPath: /data
+  ## Service configuration
+  exposeServices:
+    minio: true
+    console: true
+  ## MinIO configuration
+  configuration:
+    name: minio-config
+  ## Liveness and Readiness probes
+  liveness:
+    httpGet:
+      path: /minio/health/live
+      port: 9000
+    initialDelaySeconds: 120
+    periodSeconds: 20
+  readiness:
+    httpGet:
+      path: /minio/health/ready
+      port: 9000
+    initialDelaySeconds: 120
+    periodSeconds: 20
+  ## Resource requests and limits
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-creds-secret
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+type: Opaque
+stringData:
+  accesskey: "news-analyzer"  # Change this!
+  secretkey: "changeme-strong-secret-key"  # Change this!
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-config
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+data:
+  config.env: |
+    export MINIO_ROOT_USER="news-analyzer"
+    export MINIO_ROOT_PASSWORD="changeme-strong-secret-key"
+    export MINIO_STORAGE_CLASS_STANDARD="EC:2"
+    export MINIO_BROWSER="on"
+---
+# Service to access MinIO API (used by applications)
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-service
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+spec:
+  selector:
+    v1.min.io/tenant: news-analyzer-minio
+  ports:
+  - name: http-minio
+    port: 80
+    targetPort: 9000
+  type: ClusterIP
+---
+# Service to access MinIO Console (web UI)
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-console-service
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio-console
+spec:
+  selector:
+    v1.min.io/tenant: news-analyzer-minio
+  ports:
+  - name: http-console
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+---
+# Optional: Ingress for MinIO Console
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio-console
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - minio-news.yourdomain.com
+    secretName: minio-console-tls
+  rules:
+  - host: minio-news.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: minio-console-service
+            port:
+              number: 9090
+---
+# Job to create initial bucket
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket-setup
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio-setup
+spec:
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: minio-setup
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: mc
+        image: minio/mc:latest
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          # Wait for MinIO to be ready
+          echo "Waiting for MinIO to be ready..."
+          until mc alias set news-minio http://minio-service $MINIO_ACCESS_KEY $MINIO_SECRET_KEY; do
+            echo "Waiting for MinIO..."
+            sleep 5
+          done
+          
+          # Create bucket if it doesn't exist
+          mc mb --ignore-existing news-minio/news-cache
+          
+          # Set bucket policy to allow read/write
+          mc anonymous set download news-minio/news-cache
+          
+          echo "MinIO bucket setup complete!"
+        env:
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-creds-secret
+              key: accesskey
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-creds-secret
+              key: secretkey

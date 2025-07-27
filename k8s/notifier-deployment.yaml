@@ -30,38 +30,34 @@ spec:
             command:
             - python
             - -m
-            - notifier.service
+            - notifier.ntfy_notifier
             env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
                   key: DATABASE_URL
-            - name: EMAIL_API_KEY
+            - name: NTFY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: NTFY_URL
+            - name: NTFY_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: NTFY_TOPIC
+            - name: NTFY_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
-                  key: EMAIL_API_KEY
-            - name: EMAIL_FROM
+                  key: NTFY_TOKEN
+                  optional: true
+            - name: NTFY_ATTACH_FULL
               valueFrom:
                 configMapKeyRef:
                   name: news-analyzer-config
-                  key: EMAIL_FROM
-            - name: EMAIL_TO
-              valueFrom:
-                secretKeyRef:
-                  name: news-analyzer-secrets
-                  key: EMAIL_TO
-            - name: EMAIL_SMTP_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: news-analyzer-config
-                  key: EMAIL_SMTP_HOST
-            - name: EMAIL_SMTP_PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: news-analyzer-config
-                  key: EMAIL_SMTP_PORT
+                  key: NTFY_ATTACH_FULL
             - name: SLACK_WEBHOOK_URL
               valueFrom:
                 secretKeyRef:
@@ -110,7 +106,7 @@ spec:
         command:
         - python
         - -m
-        - notifier.service
+        - notifier.ntfy_notifier
         args:
         - --date
         - $(shell date +%Y-%m-%d)
@@ -120,31 +116,27 @@ spec:
             secretKeyRef:
               name: news-analyzer-secrets
               key: DATABASE_URL
-        - name: EMAIL_API_KEY
+        - name: NTFY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: NTFY_URL
+        - name: NTFY_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: NTFY_TOPIC
+        - name: NTFY_TOKEN
           valueFrom:
             secretKeyRef:
               name: news-analyzer-secrets
-              key: EMAIL_API_KEY
-        - name: EMAIL_FROM
+              key: NTFY_TOKEN
+              optional: true
+        - name: NTFY_ATTACH_FULL
           valueFrom:
             configMapKeyRef:
               name: news-analyzer-config
-              key: EMAIL_FROM
-        - name: EMAIL_TO
-          valueFrom:
-            secretKeyRef:
-              name: news-analyzer-secrets
-              key: EMAIL_TO
-        - name: EMAIL_SMTP_HOST
-          valueFrom:
-            configMapKeyRef:
-              name: news-analyzer-config
-              key: EMAIL_SMTP_HOST
-        - name: EMAIL_SMTP_PORT
-          valueFrom:
-            configMapKeyRef:
-              name: news-analyzer-config
-              key: EMAIL_SMTP_PORT
+              key: NTFY_ATTACH_FULL
         - name: SLACK_WEBHOOK_URL
           valueFrom:
             secretKeyRef:

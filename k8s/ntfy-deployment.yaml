@@ -1,0 +1,240 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ntfy-cache-pvc
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ntfy-data-pvc
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-config
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy
+data:
+  server.yml: |
+    # ntfy server configuration
+    base-url: https://ntfy.yourdomain.com
+    behind-proxy: true
+    
+    # Storage
+    cache-file: /var/cache/ntfy/cache.db
+    cache-duration: 24h
+    cache-batch-size: 10
+    cache-batch-timeout: 1s
+    
+    # Attachments
+    attachment-cache-dir: /var/cache/ntfy/attachments
+    attachment-total-size-limit: 5G
+    attachment-file-size-limit: 15M
+    attachment-expiry-duration: 3h
+    
+    # Auth (we'll use token auth for the app)
+    auth-file: /var/lib/ntfy/auth.db
+    auth-default-access: "deny-all"
+    enable-signup: false
+    enable-login: true
+    enable-reservations: true
+    
+    # iOS Configuration - CRITICAL for iPhone notifications
+    # This enables iOS push notifications via a unified push proxy
+    upstream-base-url: "https://ntfy.sh"
+    
+    # Rate limiting
+    visitor-request-limit-burst: 60
+    visitor-request-limit-replenish: 5s
+    visitor-email-limit-burst: 16
+    visitor-email-limit-replenish: 1h
+    visitor-attachment-total-size-limit: 100M
+    visitor-attachment-daily-bandwidth-limit: 500M
+    
+    # Logging
+    log-level: info
+    log-format: json
+    
+    # Web
+    web-root: /
+    enable-metrics: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: news-analyzer
+      component: ntfy
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: ntfy
+    spec:
+      containers:
+      - name: ntfy
+        image: binwiederhier/ntfy:v2.11.0
+        command: ["ntfy"]
+        args: ["serve"]
+        ports:
+        - containerPort: 80
+          name: http
+        env:
+        - name: TZ
+          value: America/New_York
+        volumeMounts:
+        - name: config
+          mountPath: /etc/ntfy
+        - name: cache
+          mountPath: /var/cache/ntfy
+        - name: data
+          mountPath: /var/lib/ntfy
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /v1/health
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /v1/health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: ntfy-config
+      - name: cache
+        persistentVolumeClaim:
+          claimName: ntfy-cache-pvc
+      - name: data
+        persistentVolumeClaim:
+          claimName: ntfy-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy-service
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy
+spec:
+  selector:
+    app: news-analyzer
+    component: ntfy
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ntfy-ingress
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - ntfy.yourdomain.com
+    secretName: ntfy-tls
+  rules:
+  - host: ntfy.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ntfy-service
+            port:
+              number: 80
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ntfy-setup
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ntfy-setup
+spec:
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: ntfy-setup
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: ntfy-setup
+        image: binwiederhier/ntfy:v2.11.0
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          echo "Setting up ntfy users and topics..."
+          sleep 10  # Wait for ntfy to be ready
+          
+          # Create news-analyzer user and topic
+          ntfy user add news-analyzer --role=admin || true
+          ntfy access news-analyzer news-digest write || true
+          
+          echo "Ntfy setup complete!"
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/ntfy
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: ntfy-data-pvc

@@ -1,0 +1,195 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: postgres
+data:
+  POSTGRES_DB: "news_analyzer"
+  POSTGRES_USER: "news_analyzer"
+  PGDATA: "/var/lib/postgresql/data/pgdata"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: postgres
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "changeme-strong-password-here"  # Change this!
+  DATABASE_URL: "postgresql://news_analyzer:changeme-strong-password-here@postgres-service:5432/news_analyzer"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: postgres
+spec:
+  serviceName: postgres-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: news-analyzer
+      component: postgres
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        envFrom:
+        - configMapRef:
+            name: postgres-config
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - news_analyzer
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - news_analyzer
+          initialDelaySeconds: 5
+          periodSeconds: 5
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-storage
+      labels:
+        app: news-analyzer
+        component: postgres
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: postgres
+spec:
+  selector:
+    app: news-analyzer
+    component: postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-init
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: postgres-init
+spec:
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: postgres-init
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: postgres-init
+        image: postgres:16-alpine
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          echo "Waiting for PostgreSQL to be ready..."
+          until pg_isready -h postgres-service -p 5432 -U news_analyzer; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+          
+          echo "PostgreSQL is ready. Creating initial schema..."
+          
+          # Create extensions and initial setup
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-service -U news_analyzer -d news_analyzer <<EOF
+          -- Grant all privileges
+          GRANT ALL PRIVILEGES ON DATABASE news_analyzer TO news_analyzer;
+          
+          -- Create schema if needed
+          CREATE SCHEMA IF NOT EXISTS public;
+          GRANT ALL ON SCHEMA public TO news_analyzer;
+          
+          -- Enable extensions
+          CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+          CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- For full-text search
+          
+          -- Create initial tables (if they don't exist)
+          -- This will be handled by the extractor database module
+          
+          SELECT 'Database initialization complete!' as status;
+          EOF
+          
+          echo "PostgreSQL initialization complete!"
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
