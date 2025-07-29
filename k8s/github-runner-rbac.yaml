@@ -1,0 +1,67 @@
+# Role in the news-analyzer namespace that grants permissions to manage runner resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: arc-runner-manager
+  namespace: news-analyzer
+rules:
+# Permissions for managing runner pods
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec", "pods/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing secrets (needed for runner tokens and listener configs)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing services
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing persistent volume claims
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing events
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# Permissions for managing configmaps
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing runner scale sets
+- apiGroups: ["actions.github.com"]
+  resources: ["autoscalingrunnersets", "autoscalingrunnersets/status", "autoscalingrunnersets/finalizers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing ephemeral runners
+- apiGroups: ["actions.github.com"]
+  resources: ["ephemeralrunners", "ephemeralrunners/status", "ephemeralrunners/finalizers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing ephemeral runner sets
+- apiGroups: ["actions.github.com"]
+  resources: ["ephemeralrunnersets", "ephemeralrunnersets/status", "ephemeralrunnersets/finalizers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing RBAC resources (needed for listener pod)
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Permissions for managing service accounts (needed for listener pod)
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# RoleBinding to grant the ARC controller service account permissions in news-analyzer namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: arc-runner-manager-binding
+  namespace: news-analyzer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: arc-runner-manager
+subjects:
+- kind: ServiceAccount
+  name: gha-runner-scale-set-controller-gha-rs-controller
+  namespace: github-actions

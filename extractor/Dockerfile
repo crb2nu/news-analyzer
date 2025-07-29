@@ -7,11 +7,28 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies for PDF processing
+# Install system dependencies for PDF processing and Playwright
 RUN apt-get update && apt-get install -y \
     poppler-utils \
     tesseract-ocr \
     tesseract-ocr-eng \
+    # Dependencies for Playwright browsers
+    libnss3 \
+    libnspr4 \
+    libdbus-1-3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libxkbcommon0 \
+    libatspi2.0-0 \
+    libxss1 \
+    libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
@@ -38,7 +55,9 @@ FROM python:3.11-slim as production
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    # Disable Playwright browser installation
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Install runtime dependencies for PDF processing
 RUN apt-get update && apt-get install -y \
@@ -46,6 +65,10 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user with home directory
+RUN groupadd -r extractor && \
+    useradd -r -g extractor -d /home/extractor -m extractor
 
 WORKDIR /app
 
@@ -56,9 +79,9 @@ COPY --from=base /app/.venv /app/.venv
 COPY extractor/*.py ./extractor/
 COPY extractor/pyproject.toml ./
 
-# Create non-root user
-RUN groupadd -r extractor && useradd -r -g extractor extractor
-RUN chown -R extractor:extractor /app
+# Set proper permissions
+RUN chown -R extractor:extractor /app /home/extractor
+
 USER extractor
 
 # Default command

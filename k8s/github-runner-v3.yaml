@@ -1,0 +1,39 @@
+apiVersion: actions.github.com/v1alpha1
+kind: AutoscalingRunnerSet
+metadata:
+  name: news-analyzer-runner-set
+  namespace: news-analyzer
+  labels:
+    app.kubernetes.io/version: "0.12.1"
+spec:
+  githubConfigUrl: https://github.com/crb2nu/news-analyzer
+  githubConfigSecret: github-runner-token
+  minRunners: 0
+  maxRunners: 5
+  runnerScaleSetName: news-analyzer-runners
+  
+  template:
+    spec:
+      containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:latest
+        command: ["/home/runner/run.sh"]
+        env:
+        - name: DOCKER_HOST
+          value: unix:///var/run/docker.sock
+        volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2"
+      
+      volumes:
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
