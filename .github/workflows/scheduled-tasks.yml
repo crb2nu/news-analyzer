@@ -1,0 +1,131 @@
+name: Scheduled Tasks
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: news-analyzer-runners
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check Kubernetes cluster health
+      run: |
+        echo "=== Cluster Nodes ==="
+        kubectl get nodes
+        echo ""
+        
+        echo "=== News Analyzer Namespace ==="
+        kubectl get all -n news-analyzer
+        echo ""
+        
+        echo "=== Pod Status ==="
+        kubectl get pods -n news-analyzer -o wide
+        echo ""
+        
+        echo "=== Recent Events ==="
+        kubectl get events -n news-analyzer --sort-by='.lastTimestamp' | tail -20
+    
+    - name: Check PostgreSQL database
+      run: |
+        # Check if PostgreSQL is accessible
+        kubectl exec -n news-analyzer deployment/postgres -- pg_isready || echo "PostgreSQL health check failed"
+    
+    - name: Check MinIO storage
+      run: |
+        # Check MinIO health
+        kubectl exec -n news-analyzer deployment/minio -- curl -f http://localhost:9000/minio/health/live || echo "MinIO health check failed"
+    
+    - name: Check API endpoints
+      run: |
+        # Check summarizer API
+        SUMMARIZER_POD=$(kubectl get pod -n news-analyzer -l app=summarizer -o jsonpath="{.items[0].metadata.name}")
+        kubectl exec -n news-analyzer $SUMMARIZER_POD -- curl -f http://localhost:8000/health || echo "Summarizer API health check failed"
+    
+    - name: Check storage usage
+      run: |
+        echo "=== Persistent Volume Usage ==="
+        kubectl exec -n news-analyzer deployment/postgres -- df -h /var/lib/postgresql/data || true
+        kubectl exec -n news-analyzer deployment/minio -- df -h /data || true
+    
+    - name: Generate health report
+      id: health_report
+      run: |
+        # Collect metrics
+        RUNNING_PODS=$(kubectl get pods -n news-analyzer --field-selector=status.phase=Running -o json | jq '.items | length')
+        TOTAL_PODS=$(kubectl get pods -n news-analyzer -o json | jq '.items | length')
+        PENDING_JOBS=$(kubectl get jobs -n news-analyzer --field-selector=status.successful!=1 -o json | jq '.items | length')
+        
+        echo "running_pods=$RUNNING_PODS" >> $GITHUB_OUTPUT
+        echo "total_pods=$TOTAL_PODS" >> $GITHUB_OUTPUT
+        echo "pending_jobs=$PENDING_JOBS" >> $GITHUB_OUTPUT
+    
+    - name: Send health notification
+      if: always()
+      run: |
+        STATUS="healthy"
+        PRIORITY="1"
+        TAGS="health,ok"
+        
+        if [ "${{ steps.health_report.outputs.running_pods }}" -lt "${{ steps.health_report.outputs.total_pods }}" ]; then
+          STATUS="degraded"
+          PRIORITY="3"
+          TAGS="health,warning"
+        fi
+        
+        MESSAGE="Health Check: $STATUS | Running Pods: ${{ steps.health_report.outputs.running_pods }}/${{ steps.health_report.outputs.total_pods }} | Pending Jobs: ${{ steps.health_report.outputs.pending_jobs }}"
+        
+        curl -d "$MESSAGE" \
+          -H "Title: 🏥 System Health Check" \
+          -H "Priority: $PRIORITY" \
+          -H "Tags: $TAGS" \
+          http://ntfy.news-analyzer.svc.cluster.local/news-analyzer-health || true
+
+  cleanup-old-jobs:
+    runs-on: news-analyzer-runners
+    
+    steps:
+    - name: Clean up completed jobs
+      run: |
+        # Delete completed jobs older than 7 days
+        kubectl delete jobs -n news-analyzer --field-selector=status.successful=1 \
+          -o json | jq -r '.items[] | select(.status.completionTime != null) | 
+          select(now - (.status.completionTime | fromdateiso8601) > 604800) | .metadata.name' | \
+          xargs -r kubectl delete job -n news-analyzer
+    
+    - name: Clean up failed jobs
+      run: |
+        # Delete failed jobs older than 3 days
+        kubectl delete jobs -n news-analyzer --field-selector=status.successful!=1 \
+          -o json | jq -r '.items[] | select(.status.conditions[0].type == "Failed") | 
+          select(now - (.status.conditions[0].lastTransitionTime | fromdateiso8601) > 259200) | .metadata.name' | \
+          xargs -r kubectl delete job -n news-analyzer
+    
+    - name: Clean up evicted pods
+      run: |
+        # Delete evicted pods
+        kubectl get pods -n news-analyzer --field-selector=status.phase=Failed -o json | \
+          jq -r '.items[] | select(.status.reason == "Evicted") | .metadata.name' | \
+          xargs -r kubectl delete pod -n news-analyzer
+
+  trigger-scraper:
+    runs-on: news-analyzer-runners
+    if: github.event_name == 'schedule'  # Only run on schedule, not manual dispatch
+    
+    steps:
+    - name: Trigger scraper job
+      run: |
+        # Create a manual scraper job from the cronjob
+        JOB_NAME="scraper-scheduled-$(date +%s)"
+        kubectl create job --from=cronjob/scraper-cronjob $JOB_NAME -n news-analyzer
+        
+        echo "Created job: $JOB_NAME"
+        
+        # Wait for job to start
+        sleep 10
+        
+        # Check job status
+        kubectl describe job/$JOB_NAME -n news-analyzer

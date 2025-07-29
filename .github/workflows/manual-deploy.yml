@@ -1,0 +1,129 @@
+name: Manual Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      component:
+        description: 'Component to deploy (or all)'
+        required: true
+        type: choice
+        options:
+          - all
+          - scraper
+          - extractor
+          - notifier
+          - summarizer
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        default: 'latest'
+        type: string
+
+jobs:
+  deploy:
+    runs-on: news-analyzer-runners
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+    
+    - name: Set namespace
+      id: set_namespace
+      run: |
+        case "${{ github.event.inputs.environment }}" in
+          "development")
+            NAMESPACE="news-analyzer-dev"
+            ;;
+          "staging")
+            NAMESPACE="news-analyzer-staging"
+            ;;
+          "production")
+            NAMESPACE="news-analyzer"
+            ;;
+        esac
+        echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+    
+    - name: Verify namespace exists
+      run: |
+        kubectl get namespace ${{ steps.set_namespace.outputs.namespace }} || \
+        kubectl create namespace ${{ steps.set_namespace.outputs.namespace }}
+    
+    - name: Deploy component(s)
+      run: |
+        NAMESPACE=${{ steps.set_namespace.outputs.namespace }}
+        TAG=${{ github.event.inputs.image_tag }}
+        COMPONENT=${{ github.event.inputs.component }}
+        REGISTRY="ghcr.io/${{ github.repository_owner }}"
+        
+        deploy_component() {
+          local component=$1
+          local resource_type=$2
+          local resource_name=$3
+          local container_name=$4
+          
+          echo "Deploying $component with tag $TAG to $NAMESPACE"
+          
+          kubectl set image $resource_type/$resource_name \
+            $container_name=$REGISTRY/news-analyzer-$component:$TAG \
+            -n $NAMESPACE || echo "Failed to update $component"
+        }
+        
+        # Deploy based on selection
+        if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "scraper" ]; then
+          deploy_component "scraper" "deployment" "scraper" "scraper"
+          kubectl rollout status deployment/scraper -n $NAMESPACE --timeout=5m || true
+        fi
+        
+        if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "extractor" ]; then
+          deploy_component "extractor" "job" "extractor-job" "extractor"
+        fi
+        
+        if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "notifier" ]; then
+          deploy_component "notifier" "cronjob" "notifier-cronjob" "notifier"
+        fi
+        
+        if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "summarizer" ]; then
+          deploy_component "summarizer" "deployment" "summarizer" "summarizer"
+          kubectl rollout status deployment/summarizer -n $NAMESPACE --timeout=5m || true
+        fi
+    
+    - name: Verify deployment
+      run: |
+        NAMESPACE=${{ steps.set_namespace.outputs.namespace }}
+        
+        echo "=== Deployment Status ==="
+        kubectl get deployments -n $NAMESPACE
+        echo ""
+        echo "=== Pods Status ==="
+        kubectl get pods -n $NAMESPACE
+        echo ""
+        echo "=== Recent Events ==="
+        kubectl get events -n $NAMESPACE --sort-by='.lastTimestamp' | tail -20
+    
+    - name: Send deployment notification
+      run: |
+        NAMESPACE=${{ steps.set_namespace.outputs.namespace }}
+        COMPONENT=${{ github.event.inputs.component }}
+        TAG=${{ github.event.inputs.image_tag }}
+        ENV=${{ github.event.inputs.environment }}
+        
+        MESSAGE="Manual deployment completed: $COMPONENT ($TAG) to $ENV environment"
+        
+        curl -d "$MESSAGE" \
+          -H "Title: 🚢 Manual Deployment" \
+          -H "Priority: 3" \
+          -H "Tags: deployment,$ENV" \
+          http://ntfy.news-analyzer.svc.cluster.local/news-analyzer-deployments || true

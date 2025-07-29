@@ -1,0 +1,224 @@
+name: CI/CD Pipeline
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/news-analyzer
+
+jobs:
+  lint-and-test:
+    runs-on: news-analyzer-runners
+    strategy:
+      matrix:
+        component: [scraper, extractor, notifier, summarizer]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Poetry
+      run: |
+        pip install poetry
+        poetry config virtualenvs.in-project true
+    
+    - name: Cache Poetry dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/pypoetry
+          .venv
+        key: ${{ runner.os }}-poetry-${{ matrix.component }}-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-${{ matrix.component }}-
+    
+    - name: Install dependencies
+      run: |
+        if [ "${{ matrix.component }}" = "scraper" ]; then
+          poetry install --with dev
+        else
+          cd ${{ matrix.component }}
+          poetry install --with dev
+        fi
+    
+    - name: Run linting
+      run: |
+        if [ "${{ matrix.component }}" = "scraper" ]; then
+          poetry run ruff check scraper/
+          poetry run mypy scraper/
+        else
+          cd ${{ matrix.component }}
+          poetry run ruff check .
+          poetry run mypy .
+        fi
+      continue-on-error: true
+    
+    - name: Run tests
+      run: |
+        if [ "${{ matrix.component }}" = "scraper" ]; then
+          poetry run pytest tests/ -v --cov=scraper --cov-report=xml
+        else
+          cd ${{ matrix.component }}
+          poetry run pytest tests/ -v --cov=${{ matrix.component }} --cov-report=xml
+        fi
+      continue-on-error: true
+    
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: ${{ matrix.component }}
+        name: ${{ matrix.component }}-coverage
+      continue-on-error: true
+
+  build-and-push:
+    needs: lint-and-test
+    runs-on: news-analyzer-runners
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        include:
+          - component: scraper
+            dockerfile: Dockerfile
+            context: .
+          - component: extractor
+            dockerfile: extractor/Dockerfile
+            context: .
+          - component: notifier
+            dockerfile: notifier/Dockerfile
+            context: .
+          - component: summarizer
+            dockerfile: summarizer/Dockerfile
+            context: .
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.component }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.context }}
+        file: ${{ matrix.dockerfile }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  deploy-to-k8s:
+    needs: build-and-push
+    runs-on: news-analyzer-runners
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+    
+    - name: Configure kubectl
+      run: |
+        # Assuming the runner has access to the cluster
+        # If not, you'll need to add kubeconfig as a secret
+        kubectl config current-context
+    
+    - name: Update Kubernetes deployments
+      run: |
+        # Update image tags in deployments
+        kubectl set image deployment/scraper scraper=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-scraper:main-${{ github.sha }} -n news-analyzer || true
+        kubectl set image deployment/summarizer summarizer=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-summarizer:main-${{ github.sha }} -n news-analyzer || true
+        kubectl set image cronjob/notifier-cronjob notifier=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-notifier:main-${{ github.sha }} -n news-analyzer || true
+        kubectl set image job/extractor-job extractor=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-extractor:main-${{ github.sha }} -n news-analyzer || true
+        
+        # Apply any configuration changes
+        kubectl apply -f k8s/configmap.yaml
+        kubectl apply -f k8s/secrets.yaml || true
+        
+        # Check rollout status
+        kubectl rollout status deployment/summarizer -n news-analyzer --timeout=5m || true
+        
+        # Restart cronjobs to pick up new images
+        kubectl delete job -l job-name=scraper-cronjob -n news-analyzer || true
+        kubectl create job --from=cronjob/scraper-cronjob scraper-manual-$(date +%s) -n news-analyzer || true
+
+  security-scan:
+    needs: build-and-push
+    runs-on: news-analyzer-runners
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        component: [scraper, extractor, notifier, summarizer]
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:main-${{ github.sha }}
+        format: 'sarif'
+        output: 'trivy-results-${{ matrix.component }}.sarif'
+      continue-on-error: true
+    
+    - name: Upload Trivy scan results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results-${{ matrix.component }}.sarif'
+      continue-on-error: true
+
+  notify-status:
+    needs: [lint-and-test, build-and-push, deploy-to-k8s]
+    runs-on: news-analyzer-runners
+    if: always()
+    
+    steps:
+    - name: Send notification
+      run: |
+        # Send notification to ntfy
+        STATUS="success"
+        if [ "${{ needs.deploy-to-k8s.result }}" != "success" ]; then
+          STATUS="failure"
+        fi
+        
+        curl -d "CI/CD Pipeline ${STATUS} for ${{ github.repository }} - ${{ github.ref_name }} - ${{ github.sha }}" \
+          -H "Title: News Analyzer CI/CD" \
+          -H "Priority: 3" \
+          -H "Tags: ${STATUS}" \
+          http://ntfy.news-analyzer.svc.cluster.local/news-analyzer-ci || true

@@ -1,0 +1,71 @@
+name: Dependency Update
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 8 AM UTC
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    runs-on: news-analyzer-runners
+    
+    strategy:
+      matrix:
+        component: [root, extractor, notifier, summarizer]
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Poetry
+      run: |
+        pip install poetry
+        poetry config virtualenvs.in-project true
+    
+    - name: Update dependencies
+      run: |
+        if [ "${{ matrix.component }}" = "root" ]; then
+          poetry update
+        else
+          cd ${{ matrix.component }}
+          poetry update
+        fi
+    
+    - name: Check for changes
+      id: check_changes
+      run: |
+        git diff --quiet poetry.lock || echo "changes=true" >> $GITHUB_OUTPUT
+    
+    - name: Create Pull Request
+      if: steps.check_changes.outputs.changes == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore(${{ matrix.component }}): update dependencies'
+        title: 'chore(${{ matrix.component }}): Update dependencies'
+        body: |
+          ## Automated Dependency Update
+
+          This PR updates the dependencies for the ${{ matrix.component }} component.
+
+          ### Changes
+          - Updated poetry.lock file with latest compatible versions
+          - All dependency updates follow semantic versioning constraints
+
+          ### Testing
+          - [ ] CI tests pass
+          - [ ] Manual testing completed
+          - [ ] No breaking changes identified
+
+          Please review the dependency changes and merge if all tests pass.
+        branch: dependency-update/${{ matrix.component }}-${{ github.run_number }}
+        delete-branch: true
+        labels: |
+          dependencies
+          automated

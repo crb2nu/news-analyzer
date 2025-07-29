@@ -1,0 +1,156 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  code-quality:
+    runs-on: news-analyzer-runners
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for better analysis
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install analysis tools
+      run: |
+        pip install poetry
+        poetry install --only dev
+    
+    - name: Check code formatting
+      run: |
+        poetry run black --check scraper/ extractor/ notifier/ summarizer/
+      continue-on-error: true
+    
+    - name: Security scan with Bandit
+      run: |
+        poetry run bandit -r scraper/ extractor/ notifier/ summarizer/ -ll
+      continue-on-error: true
+    
+    - name: Check for secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.pull_request.base.sha }}
+        head: ${{ github.event.pull_request.head.sha }}
+      continue-on-error: true
+  
+  docker-lint:
+    runs-on: news-analyzer-runners
+    
+    strategy:
+      matrix:
+        dockerfile:
+          - Dockerfile
+          - extractor/Dockerfile
+          - notifier/Dockerfile
+          - summarizer/Dockerfile
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Lint Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: ${{ matrix.dockerfile }}
+        ignore: DL3008,DL3009
+      continue-on-error: true
+  
+  k8s-validate:
+    runs-on: news-analyzer-runners
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Validate Kubernetes manifests
+      run: |
+        # Install kubeval
+        wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+        tar xf kubeval-linux-amd64.tar.gz
+        sudo mv kubeval /usr/local/bin
+        
+        # Validate all YAML files in k8s directory
+        find k8s/ -name '*.yaml' -o -name '*.yml' | xargs kubeval --skip-kinds RunnerDeployment,HorizontalRunnerAutoscaler,AutoscalingRunnerSet
+      continue-on-error: true
+  
+  size-check:
+    runs-on: news-analyzer-runners
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check Docker image sizes
+      run: |
+        # Build images and check sizes
+        docker build -f Dockerfile -t test-scraper:pr .
+        docker build -f extractor/Dockerfile -t test-extractor:pr .
+        docker build -f notifier/Dockerfile -t test-notifier:pr .
+        docker build -f summarizer/Dockerfile -t test-summarizer:pr .
+        
+        echo "=== Docker Image Sizes ==="
+        docker images | grep test- | awk '{print $1 ": " $7}'
+        
+        # Clean up
+        docker rmi test-scraper:pr test-extractor:pr test-notifier:pr test-summarizer:pr
+  
+  pr-comment:
+    needs: [code-quality, docker-lint, k8s-validate, size-check]
+    runs-on: news-analyzer-runners
+    if: always()
+    permissions:
+      pull-requests: write
+    
+    steps:
+    - name: Comment PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          
+          const botComment = comments.find(comment => {
+            return comment.user.type === 'Bot' && comment.body.includes('## PR Check Results')
+          });
+          
+          const body = `## PR Check Results
+          
+          | Check | Status |
+          |-------|--------|
+          | Code Quality | ${{ needs.code-quality.result }} |
+          | Docker Lint | ${{ needs.docker-lint.result }} |
+          | K8s Validation | ${{ needs.k8s-validate.result }} |
+          | Size Check | ${{ needs.size-check.result }} |
+          
+          ### Self-Hosted Runner
+          This PR was checked using our self-hosted runner infrastructure.
+          
+          ### Next Steps
+          - Review the check results above
+          - Address any failing checks
+          - Request review when ready
+          `;
+          
+          if (botComment) {
+            github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body
+            });
+          } else {
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+          }
