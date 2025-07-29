@@ -1,0 +1,59 @@
+apiVersion: minio.min.io/v2
+kind: Tenant
+metadata:
+  name: news-analyzer-minio
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+spec:
+  image: quay.io/minio/minio:latest
+  imagePullPolicy: IfNotPresent
+  credsSecret:
+    name: minio-creds-secret
+  pools:
+    - servers: 1
+      volumesPerServer: 1
+      name: pool-0
+      volumeClaimTemplate:
+        metadata:
+          name: data
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 50Gi
+          storageClassName: longhorn
+  mountPath: /export
+  requestAutoCert: false
+  configuration:
+    name: minio-config
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-creds-secret
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+type: Opaque
+stringData:
+  accesskey: "news-analyzer"
+  secretkey: "changeme-strong-secret-key"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-config
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: minio
+data:
+  config.env: |
+    export MINIO_ROOT_USER="news-analyzer"
+    export MINIO_ROOT_PASSWORD="changeme-strong-secret-key"
+    export MINIO_STORAGE_CLASS_STANDARD="EC:2"
+    export MINIO_BROWSER="on"

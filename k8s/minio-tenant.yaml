@@ -33,7 +33,7 @@ spec:
           resources:
             requests:
               storage: 50Gi
-          storageClassName: local-path
+          storageClassName: longhorn
   ## MinIO features
   features:
     enableSFTP: false

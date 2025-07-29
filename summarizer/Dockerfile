@@ -7,12 +7,6 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
 # Install Poetry
 RUN pip install poetry
 
@@ -24,10 +18,12 @@ ENV POETRY_NO_INTERACTION=1 \
 WORKDIR /app
 
 # Copy poetry files
-COPY pyproject.toml poetry.lock ./
+COPY summarizer/pyproject.toml summarizer/poetry.lock ./
 
 # Install dependencies
-RUN poetry install --only=main && rm -rf $POETRY_CACHE_DIR
+RUN poetry config virtualenvs.in-project true && \
+    poetry install --only=main --no-interaction --no-ansi --no-root && \
+    rm -rf $POETRY_CACHE_DIR
 
 # Production stage
 FROM python:3.11-slim as production
@@ -43,20 +39,16 @@ WORKDIR /app
 COPY --from=base /app/.venv /app/.venv
 
 # Copy application code
-COPY summarizer/ ./summarizer/
-COPY extractor/database.py ./extractor/database.py
-COPY extractor/__init__.py ./extractor/__init__.py
-COPY scraper/config.py ./scraper/config.py
-COPY scraper/__init__.py ./scraper/__init__.py
-COPY pyproject.toml ./
+COPY summarizer/*.py ./summarizer/
+COPY summarizer/pyproject.toml ./
 
 # Create non-root user
 RUN groupadd -r summarizer && useradd -r -g summarizer summarizer
 RUN chown -R summarizer:summarizer /app
 USER summarizer
 
-# Expose port for FastAPI
+# Expose port for API
 EXPOSE 8000
 
-# Default command - run FastAPI server
-CMD ["python", "-m", "uvicorn", "summarizer.api:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command
+CMD ["python", "-m", "summarizer.api"]

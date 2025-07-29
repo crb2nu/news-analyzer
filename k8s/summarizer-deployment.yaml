@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: summarizer
-        image: harbor.lan/news-analyzer/summarizer:latest
+        image: caedus90/news-analyzer-summarizer:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
@@ -31,11 +31,23 @@ spec:
             secretKeyRef:
               name: news-analyzer-secrets
               key: DATABASE_URL
+        - name: EEDITION_USER
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: EEDITION_USER
+        - name: EEDITION_PASS
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: EEDITION_PASS
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
               name: news-analyzer-secrets
               key: OPENAI_API_KEY
+        - name: OPENAI_API_BASE
+          value: "http://litellm.litellm.svc.cluster.local:4000"
         - name: OPENAI_MODEL
           valueFrom:
             configMapKeyRef:
@@ -102,13 +114,10 @@ metadata:
     app: news-analyzer
     component: summarizer-batch
 spec:
-  # Run every 30 minutes to process new articles
-  schedule: "*/30 * * * *"
-  timeZone: "America/New_York"
+  schedule: "*/30 * * * *"  # Every 30 minutes
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 5
-  startingDeadlineSeconds: 1800
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       template:
@@ -117,68 +126,34 @@ spec:
             app: news-analyzer
             component: summarizer-batch
         spec:
-          restartPolicy: OnFailure
           containers:
           - name: summarizer-batch
-            image: harbor.lan/news-analyzer/summarizer:latest
+            image: caedus90/news-analyzer-summarizer:latest
             imagePullPolicy: Always
-            command:
-            - python
-            - -c
-            - |
-              import asyncio
-              import requests
-              import json
-              import logging
-              
-              logging.basicConfig(level=logging.INFO)
-              logger = logging.getLogger(__name__)
-              
-              async def main():
-                  try:
-                      # Get pending articles
-                      response = requests.get("http://news-analyzer-summarizer-service:8000/articles/pending?limit=50")
-                      response.raise_for_status()
-                      data = response.json()
-                      
-                      if data['count'] == 0:
-                          logger.info("No pending articles to summarize")
-                          return
-                      
-                      article_ids = [article['id'] for article in data['articles']]
-                      logger.info(f"Processing {len(article_ids)} articles")
-                      
-                      # Submit batch summarization
-                      batch_request = {
-                          "article_ids": article_ids,
-                          "force_refresh": False
-                      }
-                      
-                      response = requests.post(
-                          "http://news-analyzer-summarizer-service:8000/summarize/batch",
-                          json=batch_request
-                      )
-                      response.raise_for_status()
-                      
-                      result = response.json()
-                      logger.info(f"Batch summarization complete: {result['successful_summaries']} successful, {result['failed_summaries']} failed")
-                      
-                  except Exception as e:
-                      logger.error(f"Batch summarization failed: {str(e)}")
-                      exit(1)
-              
-              asyncio.run(main())
+            command: ["python", "-m", "summarizer.batch"]
             env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
                   key: DATABASE_URL
+            - name: EEDITION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EEDITION_USER
+            - name: EEDITION_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: EEDITION_PASS
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
                   key: OPENAI_API_KEY
+            - name: OPENAI_API_BASE
+              value: "http://litellm.litellm.svc.cluster.local:4000"
             - name: OPENAI_MODEL
               valueFrom:
                 configMapKeyRef:
@@ -189,13 +164,21 @@ spec:
                 configMapKeyRef:
                   name: news-analyzer-config
                   key: OPENAI_MAX_TOKENS
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: LOG_LEVEL
+            - name: BATCH_SIZE
+              value: "20"
             resources:
               requests:
-                memory: "256Mi"
-                cpu: "100m"
-              limits:
                 memory: "512Mi"
                 cpu: "250m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
+          restartPolicy: OnFailure
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

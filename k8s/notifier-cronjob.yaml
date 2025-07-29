@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-notifier
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: notifier
+spec:
+  schedule: "0 8 * * *"  # Daily at 8 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: notifier
+        spec:
+          containers:
+          - name: notifier
+            image: caedus90/news-analyzer-notifier:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "notifier.ntfy_notifier"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: NTFY_URL
+              value: "http://ntfy-service.news-analyzer.svc.cluster.local"
+            - name: NTFY_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: NTFY_TOPIC
+            - name: NTFY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: NTFY_TOKEN
+                  optional: true
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: LOG_LEVEL
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000

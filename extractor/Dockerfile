@@ -7,10 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
+# Install system dependencies for PDF processing
 RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
@@ -24,10 +25,12 @@ ENV POETRY_NO_INTERACTION=1 \
 WORKDIR /app
 
 # Copy poetry files
-COPY pyproject.toml poetry.lock ./
+COPY extractor/pyproject.toml extractor/poetry.lock ./
 
 # Install dependencies
-RUN poetry install --only=main && rm -rf $POETRY_CACHE_DIR
+RUN poetry config virtualenvs.in-project true && \
+    poetry install --only=main --no-interaction --no-ansi --no-root && \
+    rm -rf $POETRY_CACHE_DIR
 
 # Production stage
 FROM python:3.11-slim as production
@@ -37,16 +40,21 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
+# Install runtime dependencies for PDF processing
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy virtual environment from base stage
 COPY --from=base /app/.venv /app/.venv
 
 # Copy application code
-COPY extractor/ ./extractor/
-COPY scraper/config.py ./scraper/config.py
-COPY scraper/__init__.py ./scraper/__init__.py
-COPY pyproject.toml ./
+COPY extractor/*.py ./extractor/
+COPY extractor/pyproject.toml ./
 
 # Create non-root user
 RUN groupadd -r extractor && useradd -r -g extractor extractor

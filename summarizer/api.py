@@ -17,8 +17,8 @@ from pydantic import BaseModel, Field
 import openai
 from openai import AsyncOpenAI
 
-from ..extractor.database import DatabaseManager, StoredArticle
-from ..scraper.config import Settings
+from .database import DatabaseManager, StoredArticle
+from .config import Settings
 
 logger = logging.getLogger(__name__)
 

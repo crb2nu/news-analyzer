@@ -12,7 +12,7 @@ spec:
   resources:
     requests:
       storage: 50Gi
-  storageClassName: local-path
+  storageClassName: longhorn
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -110,7 +110,7 @@ spec:
         component: postgres
     spec:
       accessModes: ["ReadWriteOnce"]
-      storageClassName: local-path
+      storageClassName: longhorn
       resources:
         requests:
           storage: 50Gi

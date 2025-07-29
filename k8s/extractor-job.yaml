@@ -25,7 +25,7 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: extractor
-            image: harbor.lan/news-analyzer/extractor:latest
+            image: caedus90/news-analyzer-extractor:latest
             imagePullPolicy: Always
             command:
             - python
@@ -97,7 +97,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: extractor
-        image: harbor.lan/news-analyzer/extractor:latest
+        image: caedus90/news-analyzer-extractor:latest
         imagePullPolicy: Always
         command:
         - python
