@@ -1,0 +1,17 @@
+# Namespace for Actions Runner Controller
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arc-systems
+  labels:
+    app.kubernetes.io/name: actions-runner-controller
+    app.kubernetes.io/part-of: actions-runner-controller
+---
+# Namespace for runners (if different from controller)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arc-runners
+  labels:
+    app.kubernetes.io/name: actions-runner-controller
+    app.kubernetes.io/part-of: actions-runner-controller

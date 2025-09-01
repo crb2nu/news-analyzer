@@ -6,7 +6,7 @@ on:
 
 jobs:
   code-quality:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
       continue-on-error: true
   
   docker-lint:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     
     strategy:
       matrix:
@@ -63,7 +63,7 @@ jobs:
       continue-on-error: true
   
   k8s-validate:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
       continue-on-error: true
   
   size-check:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -101,7 +101,7 @@ jobs:
   
   pr-comment:
     needs: [code-quality, docker-lint, k8s-validate, size-check]
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     if: always()
     permissions:
       pull-requests: write
@@ -130,8 +130,8 @@ jobs:
           | K8s Validation | ${{ needs.k8s-validate.result }} |
           | Size Check | ${{ needs.size-check.result }} |
           
-          ### Self-Hosted Runner
-          This PR was checked using our self-hosted runner infrastructure.
+          ### GitHub-Hosted Runner
+          This PR was checked using GitHub-hosted runners.
           
           ### Next Steps
           - Review the check results above

@@ -1,0 +1,200 @@
+# AutoscalingRunnerSet for news-analyzer project
+# This creates and manages the runner pods that execute GitHub Actions workflows
+---
+apiVersion: actions.github.com/v1alpha1
+kind: AutoscalingRunnerSet
+metadata:
+  name: news-analyzer-runners
+  namespace: arc-runners
+  labels:
+    app.kubernetes.io/name: news-analyzer-runners
+    app.kubernetes.io/part-of: actions-runner-controller
+    app.kubernetes.io/version: "0.9.3"
+spec:
+  # GitHub configuration
+  githubConfigUrl: https://github.com/crb2nu/news-analyzer
+  githubConfigSecret: github-pat-secret  # Reference to secret created earlier
+  
+  # Runner configuration
+  runnerGroup: "default"  # Optional: specify runner group
+  runnerScaleSetName: "news-analyzer-runners"
+  
+  # Scaling configuration
+  minRunners: 1  # Minimum number of idle runners
+  maxRunners: 10  # Maximum number of runners
+  
+  # Runner pod template
+  template:
+    metadata:
+      labels:
+        app: github-runner
+        runner-type: news-analyzer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: arc-runner
+      
+      # Security context for the pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      
+      containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:2.319.1
+        imagePullPolicy: IfNotPresent
+        
+        command: ["/home/runner/run.sh"]
+        
+        env:
+        # Runner environment variables
+        - name: RUNNER_NAME_PREFIX
+          value: "news-analyzer"
+        - name: RUNNER_SCOPE
+          value: "repo"
+        - name: DISABLE_RUNNER_UPDATE
+          value: "true"
+        - name: DOCKER_HOST
+          value: "unix:///var/run/docker.sock"
+        
+        # Pod information
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        
+        volumeMounts:
+        # Docker socket for Docker-in-Docker operations
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        # Work directory
+        - name: work
+          mountPath: /home/runner/_work
+        # Tool cache
+        - name: tool-cache
+          mountPath: /opt/hostedtoolcache
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2
+            memory: 4Gi
+        
+        # Security context for the container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+      
+      # Init container to set up runner
+      initContainers:
+      - name: setup
+        image: ghcr.io/actions/actions-runner:2.319.1
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          echo "Setting up runner environment..."
+          mkdir -p /home/runner/_work
+          mkdir -p /opt/hostedtoolcache
+          chmod -R 777 /home/runner/_work
+          chmod -R 777 /opt/hostedtoolcache
+          echo "Setup complete"
+        volumeMounts:
+        - name: work
+          mountPath: /home/runner/_work
+        - name: tool-cache
+          mountPath: /opt/hostedtoolcache
+        securityContext:
+          runAsUser: 0
+      
+      volumes:
+      # Docker socket from host
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
+      # Work directory (ephemeral)
+      - name: work
+        emptyDir: {}
+      # Tool cache (can be persistent if needed)
+      - name: tool-cache
+        emptyDir: {}
+      
+      # Node selector (optional)
+      nodeSelector:
+        kubernetes.io/os: linux
+      
+      # Tolerations (optional)
+      tolerations:
+      - key: "runner"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      
+      # Affinity rules (optional)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: runner-type
+                  operator: In
+                  values:
+                  - news-analyzer
+              topologyKey: kubernetes.io/hostname
+---
+# ServiceAccount for runners
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: arc-runner
+  namespace: arc-runners
+---
+# Role for runner pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: arc-runner
+  namespace: arc-runners
+rules:
+# Allow runners to create/manage pods for job containers
+- apiGroups: [""]
+  resources: ["pods", "pods/exec", "pods/log"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Allow runners to manage secrets for caching
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "create", "update", "delete"]
+# Allow runners to create events
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+# RoleBinding for runner service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: arc-runner
+  namespace: arc-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: arc-runner
+subjects:
+- kind: ServiceAccount
+  name: arc-runner
+  namespace: arc-runners

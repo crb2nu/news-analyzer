@@ -13,7 +13,7 @@ on:
 
 jobs:
   create-release:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
@@ -66,7 +66,7 @@ jobs:
 
   build-release-images:
     needs: create-release
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -120,7 +120,7 @@ jobs:
 
   deploy-release:
     needs: [create-release, build-release-images]
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     if: github.event_name == 'push'  # Only auto-deploy on tag push
     
     steps:

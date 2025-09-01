@@ -1,0 +1,152 @@
+# Actions Runner Controller v2 - Controller Deployment
+# This deploys the controller that manages runner lifecycles
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: arc-controller
+  namespace: arc-systems
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: arc-controller
+rules:
+# Core resources
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["secrets", "configmaps", "serviceaccounts"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: [""]
+  resources: ["services", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Apps resources
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Batch resources
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# RBAC resources
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# ARC CRDs
+- apiGroups: ["actions.github.com"]
+  resources: ["*"]
+  verbs: ["*"]
+# Coordination
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: arc-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: arc-controller
+subjects:
+- kind: ServiceAccount
+  name: arc-controller
+  namespace: arc-systems
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arc-controller
+  namespace: arc-systems
+  labels:
+    app.kubernetes.io/name: arc-controller
+    app.kubernetes.io/part-of: actions-runner-controller
+    app.kubernetes.io/version: "0.9.3"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: arc-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: arc-controller
+        app.kubernetes.io/part-of: actions-runner-controller
+    spec:
+      serviceAccountName: arc-controller
+      containers:
+      - name: controller
+        image: ghcr.io/actions/gha-runner-scale-set-controller:0.9.3
+        command: ["/manager"]
+        args:
+        - "--log-level=info"
+        - "--log-format=json"
+        - "--metrics-addr=:8080"
+        - "--update-strategy=immediate"
+        env:
+        - name: CONTROLLER_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        - containerPort: 8443
+          name: webhook
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arc-controller-metrics
+  namespace: arc-systems
+  labels:
+    app.kubernetes.io/name: arc-controller
+spec:
+  selector:
+    app.kubernetes.io/name: arc-controller
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arc-controller-webhook
+  namespace: arc-systems
+  labels:
+    app.kubernetes.io/name: arc-controller
+spec:
+  selector:
+    app.kubernetes.io/name: arc-controller
+  ports:
+  - name: webhook
+    port: 443
+    targetPort: 8443

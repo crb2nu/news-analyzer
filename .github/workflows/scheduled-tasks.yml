@@ -7,7 +7,7 @@ on:
 
 jobs:
   health-check:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -85,7 +85,7 @@ jobs:
           http://ntfy.news-analyzer.svc.cluster.local/news-analyzer-health || true
 
   cleanup-old-jobs:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     
     steps:
     - name: Clean up completed jobs
@@ -112,7 +112,7 @@ jobs:
           xargs -r kubectl delete pod -n news-analyzer
 
   trigger-scraper:
-    runs-on: news-analyzer-runners
+    runs-on: ubuntu-latest
     if: github.event_name == 'schedule'  # Only run on schedule, not manual dispatch
     
     steps:
