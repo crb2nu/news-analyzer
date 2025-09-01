@@ -120,7 +120,7 @@ jobs:
       run: |
         # Create a manual scraper job from the cronjob
         JOB_NAME="scraper-scheduled-$(date +%s)"
-        kubectl create job --from=cronjob/scraper-cronjob $JOB_NAME -n news-analyzer
+        kubectl create job --from=cronjob/news-analyzer-scraper $JOB_NAME -n news-analyzer
         
         echo "Created job: $JOB_NAME"
         

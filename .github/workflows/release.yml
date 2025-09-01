@@ -136,10 +136,10 @@ jobs:
         # Update deployments with release version
         VERSION=${{ needs.create-release.outputs.version }}
         
-        kubectl set image deployment/scraper scraper=ghcr.io/${{ github.repository_owner }}/news-analyzer-scraper:${VERSION} -n news-analyzer
+        kubectl set image cronjob/news-analyzer-scraper scraper=ghcr.io/${{ github.repository_owner }}/news-analyzer-scraper:${VERSION} -n news-analyzer
         kubectl set image deployment/summarizer summarizer=ghcr.io/${{ github.repository_owner }}/news-analyzer-summarizer:${VERSION} -n news-analyzer
-        kubectl set image cronjob/notifier-cronjob notifier=ghcr.io/${{ github.repository_owner }}/news-analyzer-notifier:${VERSION} -n news-analyzer
-        kubectl set image job/extractor-job extractor=ghcr.io/${{ github.repository_owner }}/news-analyzer-extractor:${VERSION} -n news-analyzer
+        kubectl set image cronjob/news-analyzer-notifier notifier=ghcr.io/${{ github.repository_owner }}/news-analyzer-notifier:${VERSION} -n news-analyzer
+        kubectl set image cronjob/news-analyzer-extractor extractor=ghcr.io/${{ github.repository_owner }}/news-analyzer-extractor:${VERSION} -n news-analyzer
         
         # Wait for rollout
         kubectl rollout status deployment/summarizer -n news-analyzer --timeout=10m

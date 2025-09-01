@@ -83,21 +83,24 @@ jobs:
         
         # Deploy based on selection
         if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "scraper" ]; then
-          deploy_component "scraper" "deployment" "scraper" "scraper"
-          kubectl rollout status deployment/scraper -n $NAMESPACE --timeout=5m || true
+          deploy_component "scraper" "cronjob" "news-analyzer-scraper" "scraper"
+          echo "✅ Scraper CronJob image updated"
         fi
         
         if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "extractor" ]; then
-          deploy_component "extractor" "job" "extractor-job" "extractor"
+          deploy_component "extractor" "cronjob" "news-analyzer-extractor" "extractor"
+          echo "✅ Extractor CronJob image updated"
         fi
         
         if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "notifier" ]; then
-          deploy_component "notifier" "cronjob" "notifier-cronjob" "notifier"
+          deploy_component "notifier" "cronjob" "news-analyzer-notifier" "notifier"
+          echo "✅ Notifier CronJob image updated"
         fi
         
         if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "summarizer" ]; then
           deploy_component "summarizer" "deployment" "summarizer" "summarizer"
           kubectl rollout status deployment/summarizer -n $NAMESPACE --timeout=5m || true
+          echo "✅ Summarizer deployment complete"
         fi
     
     - name: Verify deployment

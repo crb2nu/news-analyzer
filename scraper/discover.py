@@ -99,33 +99,50 @@ class EditionDiscoverer:
     
     def _discover_edition_pages(self, page, target_date: date, base_url: str) -> Optional[Edition]:
         """
-        Discover all pages in an edition.
+        Discover all pages in a PageSuite e-edition.
         
-        This method needs to be adapted based on the actual structure of the e-edition site.
-        The implementation below is a template that should be customized after inspecting
-        the actual site structure.
+        PageSuite typically provides:
+        1. A date selector/calendar for choosing editions
+        2. PDF downloads for each page
+        3. An HTML viewer with page thumbnails
+        4. Navigation controls for moving between pages
         """
         pages = []
         
         try:
-            # Method 1: Look for PDF links (common for e-editions)
-            pdf_links = page.locator("a[href*='.pdf']").all()
+            # First, navigate to the specific date if not today
+            if target_date != date.today():
+                if not self._navigate_to_date(page, target_date):
+                    logger.warning(f"Could not navigate to date {target_date}, using current edition")
+            
+            # Wait for the edition to load
+            page.wait_for_timeout(2000)  # Give time for dynamic content
+            
+            # Method 1: Look for PageSuite PDF download links
+            # PageSuite often uses a pattern like "Download PDF" or icons with PDF links
+            pdf_links = page.locator("a[href*='.pdf'], a[download*='.pdf'], a[title*='PDF'], a[aria-label*='PDF']").all()
             
             if pdf_links:
                 logger.info(f"Found {len(pdf_links)} PDF links")
                 for i, link in enumerate(pdf_links):
                     href = link.get_attribute("href")
-                    if href:
+                    if href and '.pdf' in href.lower():
                         # Make URL absolute if relative
                         if href.startswith("/"):
                             href = f"https://swvatoday.com{href}"
                         elif not href.startswith("http"):
                             href = f"{base_url.rstrip('/')}/{href}"
                         
-                        # Extract page info from link text or href
+                        # Extract page info from link text, title, or aria-label
                         link_text = link.text_content() or ""
-                        page_num = self._extract_page_number(link_text, href, i + 1)
-                        section = self._extract_section(link_text, href)
+                        link_title = link.get_attribute("title") or ""
+                        link_aria = link.get_attribute("aria-label") or ""
+                        
+                        # Combine all text sources for better extraction
+                        combined_text = f"{link_text} {link_title} {link_aria}"
+                        
+                        page_num = self._extract_page_number(combined_text, href, i + 1)
+                        section = self._extract_section(combined_text, href)
                         
                         pages.append(EditionPage(
                             url=href,
@@ -135,46 +152,130 @@ class EditionDiscoverer:
                             format="pdf"
                         ))
             
-            # Method 2: Look for HTML page navigation (for PageSuite-style e-editions)
+            # Method 2: Look for PageSuite viewer with page thumbnails
             if not pages:
-                # Look for page navigation elements
-                page_nav = page.locator(".page-nav, .pagination, [class*='page']").first
-                if page_nav.is_visible():
-                    # Get total pages from navigation
-                    nav_text = page_nav.text_content()
-                    total_pages = self._extract_total_pages(nav_text)
-                    
-                    if total_pages:
-                        logger.info(f"Found {total_pages} pages in HTML format")
-                        for page_num in range(1, total_pages + 1):
-                            # Construct URL for each page
-                            page_url = f"{base_url}?page={page_num}"
+                # PageSuite often uses thumbnail grids or lists for page navigation
+                thumbnails = page.locator(
+                    "img[class*='thumb'], img[class*='page'], "
+                    "div[class*='thumb'] img, div[class*='page-thumb'] img, "
+                    ".page-thumbnail img, .edition-page img"
+                ).all()
+                
+                if thumbnails:
+                    logger.info(f"Found {len(thumbnails)} page thumbnails")
+                    for i, thumb in enumerate(thumbnails):
+                        # Get the parent link or the thumbnail's data attributes
+                        parent = thumb.locator("xpath=ancestor::a").first
+                        
+                        if parent.count() > 0:
+                            href = parent.get_attribute("href")
+                        else:
+                            # Try to find associated PDF link
+                            page_id = thumb.get_attribute("data-page") or thumb.get_attribute("data-page-id")
+                            if page_id:
+                                # Construct PDF URL based on common PageSuite patterns
+                                href = f"{base_url}download/page_{page_id}.pdf"
+                            else:
+                                # Use thumbnail source as fallback
+                                thumb_src = thumb.get_attribute("src")
+                                if thumb_src:
+                                    # Convert thumbnail URL to PDF URL (common pattern)
+                                    href = thumb_src.replace("/thumb/", "/pdf/").replace(".jpg", ".pdf").replace(".png", ".pdf")
+                                else:
+                                    continue
+                        
+                        if href:
+                            # Make URL absolute
+                            if href.startswith("/"):
+                                href = f"https://swvatoday.com{href}"
+                            elif not href.startswith("http"):
+                                href = f"{base_url.rstrip('/')}/{href}"
+                            
+                            # Extract alt text or title for metadata
+                            alt_text = thumb.get_attribute("alt") or ""
+                            title_text = thumb.get_attribute("title") or ""
+                            
+                            page_num = self._extract_page_number(f"{alt_text} {title_text}", href, i + 1)
+                            section = self._extract_section(f"{alt_text} {title_text}", href)
+                            
                             pages.append(EditionPage(
-                                url=page_url,
+                                url=href,
                                 page_number=page_num,
-                                format="html"
+                                section=section,
+                                title=alt_text or title_text or None,
+                                format="pdf" if ".pdf" in href else "html"
                             ))
             
-            # Method 3: Look for iframe-based e-edition (some publishers use this)
+            # Method 3: Look for PageSuite viewer iframe
             if not pages:
-                iframe = page.locator("iframe").first
-                if iframe.is_visible():
+                # PageSuite sometimes embeds the viewer in an iframe
+                iframe = page.locator("iframe[src*='pagesuite'], iframe[src*='edition'], iframe[id*='viewer']").first
+                if iframe.count() > 0:
                     iframe_src = iframe.get_attribute("src")
                     if iframe_src:
-                        logger.info("Found iframe-based e-edition")
-                        # Navigate to iframe content to discover structure
-                        iframe_page = page.frame(iframe_src) or page
-                        # This would need site-specific implementation
-                        pages = self._discover_iframe_pages(iframe_page, base_url)
+                        logger.info(f"Found PageSuite viewer iframe: {iframe_src}")
+                        
+                        # Make iframe URL absolute
+                        if iframe_src.startswith("/"):
+                            iframe_src = f"https://swvatoday.com{iframe_src}"
+                        elif not iframe_src.startswith("http"):
+                            iframe_src = f"{base_url.rstrip('/')}/{iframe_src}"
+                        
+                        # Navigate to iframe content directly
+                        page.goto(iframe_src)
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                        
+                        # Now try to discover pages in the iframe content
+                        pages = self._discover_pagesuite_viewer_pages(page, base_url)
             
-            # If no pages found, create a single entry for the main page
+            # Method 4: Look for page navigation controls
             if not pages:
-                logger.warning("No specific pages found, using main page")
-                pages.append(EditionPage(
-                    url=base_url,
-                    page_number=1,
-                    format="html"
-                ))
+                # Check for page count in navigation
+                page_count_elem = page.locator(
+                    "[class*='page-count'], [class*='total-pages'], "
+                    "[data-total-pages], .navigation-info"
+                ).first
+                
+                if page_count_elem.count() > 0:
+                    count_text = page_count_elem.text_content()
+                    total_pages = self._extract_total_pages(count_text)
+                    
+                    if total_pages:
+                        logger.info(f"Found {total_pages} pages from navigation")
+                        
+                        # Generate page URLs based on pattern
+                        for page_num in range(1, total_pages + 1):
+                            # Common PageSuite URL patterns
+                            page_url = f"{base_url}page/{page_num}"
+                            
+                            # Try to determine if PDF is available
+                            pdf_url = f"{base_url}download/page_{page_num}.pdf"
+                            
+                            pages.append(EditionPage(
+                                url=pdf_url,  # Prefer PDF if available
+                                page_number=page_num,
+                                format="pdf"
+                            ))
+            
+            # Fallback: Create at least one page entry
+            if not pages:
+                logger.warning("No specific pages found, attempting to extract from current view")
+                
+                # Check if we're already viewing a page
+                current_page_elem = page.locator("[class*='current-page'], [class*='active'][class*='page']").first
+                if current_page_elem.count() > 0:
+                    pages.append(EditionPage(
+                        url=page.url,
+                        page_number=1,
+                        format="html"
+                    ))
+                else:
+                    # Use the base URL as fallback
+                    pages.append(EditionPage(
+                        url=base_url,
+                        page_number=1,
+                        format="html"
+                    ))
             
             edition = Edition(
                 date=target_date,
@@ -189,6 +290,141 @@ class EditionDiscoverer:
         except Exception as e:
             logger.error(f"Page discovery failed: {str(e)}")
             return None
+    
+    def _navigate_to_date(self, page, target_date: date) -> bool:
+        """
+        Navigate to a specific date in the PageSuite e-edition.
+        
+        Returns True if navigation was successful, False otherwise.
+        """
+        try:
+            # Method 1: Look for a date picker or calendar
+            date_picker = page.locator(
+                "input[type='date'], input[class*='date'], "
+                "[class*='calendar'], [class*='datepicker']"
+            ).first
+            
+            if date_picker.count() > 0:
+                # Format date for input
+                date_str = target_date.strftime("%Y-%m-%d")
+                date_picker.fill(date_str)
+                
+                # Look for a submit/go button
+                go_button = page.locator(
+                    "button[type='submit'], button:has-text('Go'), "
+                    "button:has-text('View'), button:has-text('Load')"
+                ).first
+                
+                if go_button.count() > 0:
+                    go_button.click()
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                    return True
+            
+            # Method 2: Look for date navigation links
+            date_links = page.locator(f"a:has-text('{target_date.strftime('%B %d, %Y')}')").all()
+            if date_links:
+                date_links[0].click()
+                page.wait_for_load_state("networkidle", timeout=10000)
+                return True
+            
+            # Method 3: URL-based navigation
+            # Many PageSuite sites use date in URL
+            date_url = f"{page.url}?date={target_date.strftime('%Y-%m-%d')}"
+            page.goto(date_url)
+            page.wait_for_load_state("networkidle", timeout=10000)
+            
+            # Check if the date navigation worked
+            # Look for date display on page
+            date_display = page.locator(f"*:has-text('{target_date.strftime('%B %d, %Y')}')").first
+            if date_display.count() > 0:
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Date navigation failed: {str(e)}")
+            return False
+    
+    def _discover_pagesuite_viewer_pages(self, page, base_url: str) -> List[EditionPage]:
+        """
+        Discover pages within a PageSuite viewer interface.
+        
+        This handles the specific PageSuite viewer that might be loaded
+        in an iframe or as the main content.
+        """
+        pages = []
+        
+        try:
+            # PageSuite viewer specific selectors
+            # Look for page list or grid
+            page_items = page.locator(
+                ".page-item, .page-tile, .edition-page-item, "
+                "[data-page-number], [data-page-id]"
+            ).all()
+            
+            if page_items:
+                logger.info(f"Found {len(page_items)} pages in PageSuite viewer")
+                
+                for item in page_items:
+                    # Extract page number
+                    page_num_attr = item.get_attribute("data-page-number") or item.get_attribute("data-page")
+                    if not page_num_attr:
+                        # Try to extract from text
+                        item_text = item.text_content() or ""
+                        page_num_match = re.search(r'\d+', item_text)
+                        page_num = int(page_num_match.group()) if page_num_match else len(pages) + 1
+                    else:
+                        page_num = int(page_num_attr)
+                    
+                    # Look for download link
+                    download_link = item.locator("a[download], a[href*='.pdf']").first
+                    if download_link.count() > 0:
+                        href = download_link.get_attribute("href")
+                    else:
+                        # Construct PDF URL based on page number
+                        href = f"{base_url}download/page_{page_num}.pdf"
+                    
+                    if href:
+                        # Make URL absolute
+                        if href.startswith("/"):
+                            href = f"https://swvatoday.com{href}"
+                        elif not href.startswith("http"):
+                            href = f"{base_url.rstrip('/')}/{href}"
+                        
+                        pages.append(EditionPage(
+                            url=href,
+                            page_number=page_num,
+                            format="pdf" if ".pdf" in href else "html"
+                        ))
+            
+            # Alternative: Look for viewer controls
+            if not pages:
+                # Check for total pages in viewer info
+                viewer_info = page.locator(
+                    ".viewer-info, .page-info, [class*='page-counter']"
+                ).first
+                
+                if viewer_info.count() > 0:
+                    info_text = viewer_info.text_content()
+                    total_pages = self._extract_total_pages(info_text)
+                    
+                    if total_pages:
+                        logger.info(f"Found {total_pages} pages from viewer info")
+                        
+                        for page_num in range(1, total_pages + 1):
+                            # Generate URLs based on PageSuite patterns
+                            pdf_url = f"{base_url}edition/page_{page_num}.pdf"
+                            
+                            pages.append(EditionPage(
+                                url=pdf_url,
+                                page_number=page_num,
+                                format="pdf"
+                            ))
+        
+        except Exception as e:
+            logger.error(f"PageSuite viewer discovery failed: {str(e)}")
+        
+        return pages
     
     def _extract_page_number(self, text: str, url: str, fallback: int) -> int:
         """Extract page number from text or URL"""
@@ -233,6 +469,8 @@ class EditionDiscoverer:
             r'of\s+(\d+)',
             r'/\s*(\d+)',
             r'total:\s*(\d+)',
+            r'(\d+)\s*pages?',
+            r'page\s*\d+\s*of\s*(\d+)',
         ]
         
         for pattern in patterns:
@@ -240,31 +478,13 @@ class EditionDiscoverer:
             if match:
                 return int(match.group(1))
         
+        # Also try to find just a number if it's the only/largest number
+        numbers = re.findall(r'\d+', nav_text)
+        if numbers:
+            # Return the largest number as it's likely the total
+            return max(int(n) for n in numbers)
+        
         return None
-    
-    def _discover_iframe_pages(self, iframe_page, base_url: str) -> List[EditionPage]:
-        """Discover pages within an iframe-based e-edition"""
-        # This is a placeholder - implementation would depend on the specific
-        # iframe content structure used by the publisher
-        pages = []
-        
-        try:
-            # Example: Look for navigation within iframe
-            nav_elements = iframe_page.locator("[class*='nav'], [class*='page']").all()
-            
-            for i, element in enumerate(nav_elements):
-                href = element.get_attribute("href")
-                if href:
-                    pages.append(EditionPage(
-                        url=href,
-                        page_number=i + 1,
-                        format="html"
-                    ))
-        
-        except Exception as e:
-            logger.error(f"Iframe discovery failed: {str(e)}")
-        
-        return pages
     
     def save_edition_info(self, edition: Edition, output_path: Path) -> None:
         """Save edition information to JSON file"""

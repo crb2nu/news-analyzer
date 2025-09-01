@@ -15,13 +15,17 @@ from typing import List, Dict, Optional, Union, Tuple
 from datetime import datetime, date
 import json
 import os
+import sys
 from minio import Minio
 from minio.error import S3Error
 
-from .pdf_extractor import PDFExtractor, Article as PDFArticle
-from .html_extractor import HTMLExtractor, HTMLArticle
-from .database import DatabaseManager, StoredArticle
-from ..scraper.config import Settings
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from extractor.pdf_extractor import PDFExtractor, Article as PDFArticle
+from extractor.html_extractor import HTMLExtractor, HTMLArticle
+from extractor.database import DatabaseManager, StoredArticle
+from scraper.config import Settings
 
 logger = logging.getLogger(__name__)
 

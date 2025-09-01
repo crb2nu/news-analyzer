@@ -28,12 +28,11 @@ spec:
             image: caedus90/news-analyzer-extractor:latest
             imagePullPolicy: Always
             command:
-            - python
-            - -m
-            - extractor.processor
-            args:
-            - --date
-            - $(shell date +%Y-%m-%d)
+            - /bin/sh
+            - -c
+            - |
+              DATE=$(date +%Y-%m-%d)
+              python -m extractor.processor --date $DATE
             env:
             - name: DATABASE_URL
               valueFrom:
@@ -100,13 +99,11 @@ spec:
         image: caedus90/news-analyzer-extractor:latest
         imagePullPolicy: Always
         command:
-        - python
-        - -m
-        - extractor.processor
-        args:
-        - --date
-        - $(shell date +%Y-%m-%d)
-        - --force
+        - /bin/sh
+        - -c
+        - |
+          DATE=$(date +%Y-%m-%d)
+          python -m extractor.processor --date $DATE --force
         env:
         - name: DATABASE_URL
           valueFrom:

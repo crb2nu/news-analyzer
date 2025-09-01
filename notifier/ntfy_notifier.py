@@ -12,9 +12,15 @@ from typing import List, Dict, Optional, Any
 import aiohttp
 import json
 from base64 import b64encode
+import argparse
+import sys
+from pathlib import Path
 
-from ..extractor.database import DatabaseManager, StoredArticle
-from ..scraper.config import Settings
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from extractor.database import DatabaseManager, StoredArticle
+from scraper.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -345,3 +351,84 @@ class UpdatedNotificationService:
             await conn.execute(sql, article_ids)
         
         logger.info(f"Marked {len(article_ids)} articles as notified")
+
+
+async def async_main(target_date: Optional[str] = None):
+    """Main async function for CLI execution"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Load settings
+        from scraper.config import Settings
+        settings = Settings()
+        
+        # Initialize the notification service
+        service = UpdatedNotificationService(settings)
+        await service.initialize()
+        
+        # Parse the target date if provided
+        if target_date:
+            try:
+                date_obj = datetime.strptime(target_date, '%Y-%m-%d').date()
+                logger.info(f"Processing notifications for date: {date_obj}")
+            except ValueError:
+                logger.error(f"Invalid date format: {target_date}. Use YYYY-MM-DD format.")
+                await service.close()
+                return 1
+        else:
+            date_obj = date.today()
+            logger.info(f"Processing notifications for today: {date_obj}")
+        
+        # Send the daily digest
+        logger.info("Sending daily digest...")
+        result = await service.send_daily_digest(date_obj)
+        
+        # Log results
+        if result.get('articles_count', 0) > 0:
+            logger.info(f"Daily digest sent successfully for {result['articles_count']} articles")
+            if result.get('ntfy_sent'):
+                logger.info("✓ Ntfy notification sent")
+            if result.get('slack_sent'):
+                logger.info("✓ Slack notification sent")
+            if result.get('errors'):
+                for error in result['errors']:
+                    logger.warning(f"Warning: {error}")
+        else:
+            logger.info("No articles to send in digest")
+        
+        # Clean up resources
+        await service.close()
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Error in notification service: {e}", exc_info=True)
+        return 1
+
+
+def main():
+    """CLI entry point"""
+    parser = argparse.ArgumentParser(
+        description='News Analyzer Notification Service - Send news digests via ntfy',
+        prog='python -m notifier.ntfy_notifier'
+    )
+    parser.add_argument(
+        '--date',
+        type=str,
+        help='Specific date to process (YYYY-MM-DD format). Defaults to today.',
+        default=None
+    )
+    
+    args = parser.parse_args()
+    
+    # Run the async main function
+    exit_code = asyncio.run(async_main(args.date))
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

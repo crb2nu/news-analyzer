@@ -28,12 +28,11 @@ spec:
             image: caedus90/news-analyzer-scraper:latest
             imagePullPolicy: Always
             command:
-            - python
-            - -m
-            - scraper.downloader
-            args:
-            - --date
-            - $(shell date +%Y-%m-%d)
+            - /bin/sh
+            - -c
+            - |
+              DATE=$(date +%Y-%m-%d)
+              python -m scraper.downloader --date $DATE
             env:
             - name: EEDITION_USER
               valueFrom:
@@ -49,12 +48,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
-                  key: SMARTPROXY_USER
+                  key: SMARTPROXY_USERNAME
             - name: SMARTPROXY_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
-                  key: SMARTPROXY_PASS
+                  key: SMARTPROXY_PASSWORD
             - name: SMARTPROXY_HOST
               valueFrom:
                 configMapKeyRef:
@@ -170,12 +169,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
-                  key: SMARTPROXY_USER
+                  key: SMARTPROXY_USERNAME
             - name: SMARTPROXY_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: news-analyzer-secrets
-                  key: SMARTPROXY_PASS
+                  key: SMARTPROXY_PASSWORD
             - name: SMARTPROXY_HOST
               valueFrom:
                 configMapKeyRef:

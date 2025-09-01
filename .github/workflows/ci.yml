@@ -162,22 +162,22 @@ jobs:
     
     - name: Update Kubernetes deployments
       run: |
-        # Update image tags in deployments
-        kubectl set image deployment/scraper scraper=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-scraper:main-${{ github.sha }} -n news-analyzer || true
+        # Update image tags in deployments and cronjobs
+        kubectl set image cronjob/news-analyzer-scraper scraper=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-scraper:main-${{ github.sha }} -n news-analyzer || true
         kubectl set image deployment/summarizer summarizer=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-summarizer:main-${{ github.sha }} -n news-analyzer || true
-        kubectl set image cronjob/notifier-cronjob notifier=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-notifier:main-${{ github.sha }} -n news-analyzer || true
-        kubectl set image job/extractor-job extractor=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-extractor:main-${{ github.sha }} -n news-analyzer || true
+        kubectl set image cronjob/news-analyzer-notifier notifier=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-notifier:main-${{ github.sha }} -n news-analyzer || true
+        kubectl set image cronjob/news-analyzer-extractor extractor=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-extractor:main-${{ github.sha }} -n news-analyzer || true
         
         # Apply any configuration changes
         kubectl apply -f k8s/configmap.yaml
         kubectl apply -f k8s/secrets.yaml || true
         
-        # Check rollout status
+        # Check rollout status for deployments only
         kubectl rollout status deployment/summarizer -n news-analyzer --timeout=5m || true
         
-        # Restart cronjobs to pick up new images
-        kubectl delete job -l job-name=scraper-cronjob -n news-analyzer || true
-        kubectl create job --from=cronjob/scraper-cronjob scraper-manual-$(date +%s) -n news-analyzer || true
+        # Restart cronjobs to pick up new images by creating manual jobs
+        kubectl create job --from=cronjob/news-analyzer-scraper scraper-manual-$(date +%s) -n news-analyzer || true
+        kubectl create job --from=cronjob/news-analyzer-extractor extractor-manual-$(date +%s) -n news-analyzer || true
 
   security-scan:
     needs: build-and-push
