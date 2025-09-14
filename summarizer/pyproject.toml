@@ -3,6 +3,7 @@ name = "summarizer"
 version = "0.1.0"
 description = "AI summarization service for news articles"
 authors = ["Codex <codex@openai.com>"]
+packages = [{include = ".", from = "."}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
