@@ -3,6 +3,7 @@ name = "notifier"
 version = "0.1.0"
 description = "Notification service for news summaries"
 authors = ["Codex <codex@openai.com>"]
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.11"
