@@ -1,89 +1,57 @@
-# Multi-stage build for the news analyzer scraper
-FROM python:3.11-slim as base
+# Multi-stage build for all components
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libdrm2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libxss1 \
-    libnss3 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-RUN pip install poetry
-
-# Configure Poetry
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
-
+# ===== SCRAPER =====
+FROM python:3.11-slim AS scraper
 WORKDIR /app
-
-# Copy poetry files
-COPY pyproject.toml poetry.lock ./
-
-# Install dependencies
-RUN poetry config virtualenvs.in-project true && \
-    poetry install --only=main --no-interaction --no-ansi --no-root && \
-    rm -rf $POETRY_CACHE_DIR
-
-# Install Playwright browsers
-RUN poetry run playwright install chromium --with-deps
-
-# Production stage
-FROM python:3.11-slim as production
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:$PATH"
-
-# Install runtime dependencies for Playwright
 RUN apt-get update && apt-get install -y \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libdrm2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libxss1 \
-    libnss3 \
+    build-essential \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
+RUN pip install poetry==1.8.5
+COPY scraper/pyproject.toml scraper/poetry.lock ./
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi
+COPY scraper/ ./
+CMD ["python", "-m", "scraper"]
 
+# ===== EXTRACTOR =====
+FROM python:3.11-slim AS extractor
 WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install poetry==1.8.5
+COPY extractor/pyproject.toml extractor/poetry.lock ./
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi
+COPY extractor/ ./
+CMD ["python", "-m", "extractor"]
 
-# Copy virtual environment from base stage
-COPY --from=base /app/.venv /app/.venv
+# ===== SUMMARIZER =====
+FROM python:3.11-slim AS summarizer
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install poetry==1.8.5
+COPY summarizer/pyproject.toml summarizer/poetry.lock ./
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi
+COPY summarizer/ ./
+CMD ["python", "-m", "summarizer"]
 
-# Copy Playwright browsers
-COPY --from=base /root/.cache/ms-playwright /root/.cache/ms-playwright
-
-# Copy application code
-COPY scraper/ ./scraper/
-COPY docs/ ./docs/
-COPY pyproject.toml ./
-
-# Create non-root user
-RUN groupadd -r scraper && useradd -r -g scraper scraper
-RUN chown -R scraper:scraper /app
-USER scraper
-
-# Default command
-CMD ["python", "-m", "scraper.downloader", "--help"]
+# ===== NOTIFIER =====
+FROM python:3.11-slim AS notifier
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install poetry==1.8.5
+COPY notifier/pyproject.toml notifier/poetry.lock ./
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi
+COPY notifier/ ./
+CMD ["python", "-m", "notifier"]

@@ -38,8 +38,8 @@ ENV POETRY_NO_INTERACTION=1 \
 
 WORKDIR /app
 
-# Copy poetry files (no poetry.lock needed with package-mode=false)
-COPY scraper/pyproject.toml ./
+# Copy poetry files
+COPY pyproject.toml poetry.lock ./
 
 # Install dependencies
 RUN poetry config virtualenvs.in-project true && \
@@ -91,8 +91,7 @@ COPY --from=base /app/.venv /app/.venv
 COPY --from=base /root/.cache/ms-playwright /home/scraper/.cache/ms-playwright
 
 # Copy application code
-COPY scraper/*.py ./scraper/
-COPY scraper/pyproject.toml ./
+COPY . .
 
 # Create storage directory for session state
 RUN mkdir -p /app/storage
