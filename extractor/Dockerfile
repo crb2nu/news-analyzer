@@ -41,12 +41,12 @@ ENV POETRY_NO_INTERACTION=1 \
 
 WORKDIR /app
 
-# Copy poetry files
-COPY extractor/pyproject.toml extractor/poetry.lock ./
+# Copy poetry files (no poetry.lock needed with package-mode=false)
+COPY extractor/pyproject.toml ./
 
 # Install dependencies
 RUN poetry config virtualenvs.in-project true && \
-    poetry install --only=main --no-interaction --no-ansi --no-root && \
+    poetry install --only=main --no-interaction --no-ansi && \
     rm -rf $POETRY_CACHE_DIR
 
 # Production stage

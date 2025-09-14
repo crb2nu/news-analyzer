@@ -38,12 +38,12 @@ ENV POETRY_NO_INTERACTION=1 \
 
 WORKDIR /app
 
-# Copy poetry files
-COPY scraper/pyproject.toml scraper/poetry.lock ./
+# Copy poetry files (no poetry.lock needed with package-mode=false)
+COPY scraper/pyproject.toml ./
 
 # Install dependencies
 RUN poetry config virtualenvs.in-project true && \
-    poetry install --only=main --no-interaction --no-ansi --no-root && \
+    poetry install --only=main --no-interaction --no-ansi && \
     rm -rf $POETRY_CACHE_DIR
 
 # Install Playwright browsers
