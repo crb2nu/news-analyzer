@@ -1,2 +1,11 @@
 .env
 k8s/github-runner-secret.yaml
+
+# Additional secret patterns (for safety)
+*.secret
+*.key
+*.pem
+*.crt
+# Note: k8s/secrets.yaml is intentionally tracked for private repo
+# For public repos, uncomment the line below:
+# k8s/secrets.yaml

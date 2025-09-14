@@ -1,0 +1,78 @@
+version: 2
+updates:
+  # Root project dependencies
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    labels:
+      - "dependencies"
+      - "python"
+      - "root"
+    open-pull-requests-limit: 5
+    
+  # Scraper module dependencies
+  - package-ecosystem: "pip"
+    directory: "/scraper"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    labels:
+      - "dependencies"
+      - "python"
+      - "scraper"
+    open-pull-requests-limit: 5
+    
+  # Extractor module dependencies
+  - package-ecosystem: "pip"
+    directory: "/extractor"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    labels:
+      - "dependencies"
+      - "python"
+      - "extractor"
+    open-pull-requests-limit: 5
+    
+  # Summarizer module dependencies
+  - package-ecosystem: "pip"
+    directory: "/summarizer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    labels:
+      - "dependencies"
+      - "python"
+      - "summarizer"
+    open-pull-requests-limit: 5
+    
+  # Notifier module dependencies
+  - package-ecosystem: "pip"
+    directory: "/notifier"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    labels:
+      - "dependencies"
+      - "python"
+      - "notifier"
+    open-pull-requests-limit: 5
+    
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    open-pull-requests-limit: 5

@@ -11,7 +11,7 @@ jobs:
     
     strategy:
       matrix:
-        component: [root, extractor, notifier, summarizer]
+        component: [root, scraper, extractor, notifier, summarizer]
     
     steps:
     - uses: actions/checkout@v4
@@ -31,16 +31,26 @@ jobs:
     - name: Update dependencies
       run: |
         if [ "${{ matrix.component }}" = "root" ]; then
-          poetry update
+          echo "Updating root dependencies..."
+          poetry update --no-interaction
         else
+          echo "Updating ${{ matrix.component }} dependencies..."
           cd ${{ matrix.component }}
-          poetry update
+          poetry update --no-interaction
         fi
     
     - name: Check for changes
       id: check_changes
       run: |
-        git diff --quiet poetry.lock || echo "changes=true" >> $GITHUB_OUTPUT
+        # Check if any pyproject.toml files have changed
+        if git diff --quiet HEAD -- '**/pyproject.toml' pyproject.toml; then
+          echo "No dependency changes detected"
+          echo "changes=false" >> $GITHUB_OUTPUT
+        else
+          echo "Dependency changes detected"
+          echo "changes=true" >> $GITHUB_OUTPUT
+          git diff --name-only HEAD -- '**/pyproject.toml' pyproject.toml
+        fi
     
     - name: Create Pull Request
       if: steps.check_changes.outputs.changes == 'true'
@@ -55,7 +65,7 @@ jobs:
           This PR updates the dependencies for the ${{ matrix.component }} component.
 
           ### Changes
-          - Updated poetry.lock file with latest compatible versions
+          - Updated dependencies to latest compatible versions
           - All dependency updates follow semantic versioning constraints
 
           ### Testing
@@ -69,3 +79,4 @@ jobs:
         labels: |
           dependencies
           automated
+          ${{ matrix.component }}
