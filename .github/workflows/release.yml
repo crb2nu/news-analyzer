@@ -75,21 +75,26 @@ jobs:
       matrix:
         include:
           - component: scraper
-            dockerfile: Dockerfile
-            context: .
+            dockerfile: scraper/Dockerfile
+            context: scraper
           - component: extractor
             dockerfile: extractor/Dockerfile
-            context: .
+            context: extractor
           - component: notifier
             dockerfile: notifier/Dockerfile
-            context: .
+            context: notifier
           - component: summarizer
             dockerfile: summarizer/Dockerfile
-            context: .
+            context: summarizer
     
     steps:
     - uses: actions/checkout@v4
     
+    - name: Set up QEMU (multi-arch)
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: all
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     

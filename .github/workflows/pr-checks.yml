@@ -113,10 +113,10 @@ jobs:
     - name: Check Docker image sizes
       run: |
         # Build images and check sizes
-        docker build -f Dockerfile -t test-scraper:pr .
-        docker build -f extractor/Dockerfile -t test-extractor:pr .
-        docker build -f notifier/Dockerfile -t test-notifier:pr .
-        docker build -f summarizer/Dockerfile -t test-summarizer:pr .
+        docker build -f scraper/Dockerfile -t test-scraper:pr scraper
+        docker build -f extractor/Dockerfile -t test-extractor:pr extractor
+        docker build -f notifier/Dockerfile -t test-notifier:pr notifier
+        docker build -f summarizer/Dockerfile -t test-summarizer:pr summarizer
         
         echo "=== Docker Image Sizes ==="
         docker images | grep test- | awk '{print $1 ": " $7}'
