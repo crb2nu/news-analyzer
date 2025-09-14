@@ -18,7 +18,7 @@ ENV POETRY_NO_INTERACTION=1 \
 WORKDIR /app
 
 # Copy poetry files
-COPY summarizer/pyproject.toml summarizer/poetry.lock ./
+COPY summarizer/pyproject.toml ./
 
 # Install dependencies
 RUN poetry config virtualenvs.in-project true && \
