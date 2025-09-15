@@ -126,7 +126,7 @@ jobs:
   deploy-release:
     needs: [create-release, build-release-images]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'  # Only auto-deploy on tag push
+    if: ${{ github.event_name == 'push' && (secrets.KUBECONFIG_B64 != '' || secrets.KUBECONFIG != '') }}  # Only auto-deploy on tag push when kubeconfig provided
     
     steps:
     - uses: actions/checkout@v4
@@ -135,6 +135,20 @@ jobs:
       uses: azure/setup-kubectl@v3
       with:
         version: 'latest'
+    
+    - name: Setup kubeconfig
+      run: |
+        mkdir -p $HOME/.kube
+        if [ -n "${{ secrets.KUBECONFIG_B64 }}" ]; then
+          echo "Using base64-encoded kubeconfig from secrets"
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > $HOME/.kube/config
+        elif [ -n "${{ secrets.KUBECONFIG }}" ]; then
+          echo "Using plaintext kubeconfig from secrets"
+          echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
+        else
+          echo "Kubeconfig secret not provided" && exit 1
+        fi
+        chmod 600 $HOME/.kube/config
     
     - name: Deploy release to production
       run: |
