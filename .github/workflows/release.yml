@@ -126,31 +126,41 @@ jobs:
   deploy-release:
     needs: [create-release, build-release-images]
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && (secrets.KUBECONFIG_B64 != '' || secrets.KUBECONFIG != '') }}  # Only auto-deploy on tag push when kubeconfig provided
+    if: github.event_name == 'push'  # Only auto-deploy on tag push; secrets check is step-gated
     
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Check for kubeconfig secret
+      id: kubecheck
+      run: |
+        if [ -n "${{ secrets.KUBECONFIG_B64 }}" ] || [ -n "${{ secrets.KUBECONFIG }}" ]; then
+          echo "has_kube=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_kube=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Install kubectl
+      if: steps.kubecheck.outputs.has_kube == 'true'
       uses: azure/setup-kubectl@v3
       with:
         version: 'latest'
-    
+
     - name: Setup kubeconfig
+      if: steps.kubecheck.outputs.has_kube == 'true'
       run: |
         mkdir -p $HOME/.kube
         if [ -n "${{ secrets.KUBECONFIG_B64 }}" ]; then
           echo "Using base64-encoded kubeconfig from secrets"
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > $HOME/.kube/config
-        elif [ -n "${{ secrets.KUBECONFIG }}" ]; then
+        else
           echo "Using plaintext kubeconfig from secrets"
           echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
-        else
-          echo "Kubeconfig secret not provided" && exit 1
         fi
         chmod 600 $HOME/.kube/config
     
     - name: Deploy release to production
+      if: steps.kubecheck.outputs.has_kube == 'true'
       run: |
         # Update deployments with release version
         VERSION=${{ needs.create-release.outputs.version }}
@@ -168,9 +178,14 @@ jobs:
         kubectl annotate deployment --all -n news-analyzer release.date=$(date -u +"%Y-%m-%dT%H:%M:%SZ") --overwrite
     
     - name: Send release notification
+      if: steps.kubecheck.outputs.has_kube == 'true'
       run: |
         curl -d "News Analyzer ${VERSION} has been successfully deployed to production!" \
           -H "Title: 🚀 Release Deployed" \
           -H "Priority: 4" \
           -H "Tags: rocket,release" \
           http://ntfy.news-analyzer.svc.cluster.local/news-analyzer-releases || true
+
+    - name: Skip deploy (no kubeconfig provided)
+      if: steps.kubecheck.outputs.has_kube != 'true'
+      run: echo "Kubeconfig secret not provided; skipping production deployment."

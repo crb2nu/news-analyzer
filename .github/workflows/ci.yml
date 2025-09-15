@@ -143,31 +143,41 @@ jobs:
   deploy-to-k8s:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (secrets.KUBECONFIG_B64 != '' || secrets.KUBECONFIG != '') }}
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Check for kubeconfig secret
+      id: kubecheck
+      run: |
+        if [ -n "${{ secrets.KUBECONFIG_B64 }}" ] || [ -n "${{ secrets.KUBECONFIG }}" ]; then
+          echo "has_kube=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_kube=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Install kubectl
+      if: steps.kubecheck.outputs.has_kube == 'true'
       uses: azure/setup-kubectl@v3
       with:
         version: 'latest'
-    
+
     - name: Setup kubeconfig
+      if: steps.kubecheck.outputs.has_kube == 'true'
       run: |
         mkdir -p $HOME/.kube
         if [ -n "${{ secrets.KUBECONFIG_B64 }}" ]; then
           echo "Using base64-encoded kubeconfig from secrets"
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > $HOME/.kube/config
-        elif [ -n "${{ secrets.KUBECONFIG }}" ]; then
+        else
           echo "Using plaintext kubeconfig from secrets"
           echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
-        else
-          echo "Kubeconfig secret not provided" && exit 1
         fi
         chmod 600 $HOME/.kube/config
     
     - name: Update Kubernetes deployments
+      if: steps.kubecheck.outputs.has_kube == 'true'
       run: |
         # Update image tags in deployments and cronjobs
         kubectl set image cronjob/news-analyzer-scraper scraper=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-scraper:main-${{ github.sha }} -n news-analyzer || true
@@ -185,6 +195,10 @@ jobs:
         # Restart cronjobs to pick up new images by creating manual jobs
         kubectl create job --from=cronjob/news-analyzer-scraper scraper-manual-$(date +%s) -n news-analyzer || true
         kubectl create job --from=cronjob/news-analyzer-extractor extractor-manual-$(date +%s) -n news-analyzer || true
+
+    - name: Skip deploy (no kubeconfig provided)
+      if: steps.kubecheck.outputs.has_kube != 'true'
+      run: echo "Kubeconfig secret not provided; skipping deploy to Kubernetes."
 
   security-scan:
     needs: build-and-push
