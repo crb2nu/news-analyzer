@@ -180,6 +180,7 @@ jobs:
     - name: Send release notification
       if: steps.kubecheck.outputs.has_kube == 'true'
       run: |
+        VERSION="${{ needs.create-release.outputs.version }}"
         curl -d "News Analyzer ${VERSION} has been successfully deployed to production!" \
           -H "Title: 🚀 Release Deployed" \
           -H "Priority: 4" \
