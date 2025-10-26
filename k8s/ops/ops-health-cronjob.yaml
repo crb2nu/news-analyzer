@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-ops-health
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops-health
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: ops-health
+        spec:
+          serviceAccountName: news-analyzer-ops-bot
+          restartPolicy: OnFailure
+          containers:
+          - name: health
+            image: python:3.11-slim
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: TZ
+              value: America/New_York
+            - name: NAMESPACE
+              value: news-analyzer
+            - name: NTFY_URL
+              value: "http://ntfy-service.news-analyzer.svc.cluster.local"
+            - name: NTFY_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: NTFY_TOPIC
+                  optional: true
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+                  optional: true
+            - name: SUMMARIZER_URL
+              value: "http://news-analyzer-summarizer-service.news-analyzer.svc.cluster.local:8000/health"
+            - name: MINIO_HEALTH_URL
+              value: "http://minio-service.news-analyzer.svc.cluster.local:9000/minio/health/live"
+            command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              python -c "import sys; print(sys.version)"
+              pip install --no-cache-dir --quiet kubernetes requests psycopg2-binary
+              python /app/health_check.py
+            volumeMounts:
+            - name: ops-scripts
+              mountPath: /app
+          volumes:
+          - name: ops-scripts
+            configMap:
+              name: news-analyzer-ops-scripts
+

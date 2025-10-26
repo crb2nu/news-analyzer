@@ -1,0 +1,111 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: news-analyzer-kaniko-build
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: builder
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: builder
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+      - name: harbor-regcred
+      volumes:
+      - name: workspace
+        emptyDir: {}
+      - name: docker-config
+        secret:
+          secretName: harbor-regcred
+          items:
+          - key: .dockerconfigjson
+            path: config.json
+      - name: git-ssh
+        secret:
+          secretName: git-ssh
+          optional: true
+      initContainers:
+      - name: fetch-source
+        image: alpine/git:2.45.2
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: GIT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-builder-config
+              key: GIT_URL
+        - name: GIT_REF
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-builder-config
+              key: GIT_REF
+        command: ["/bin/sh", "-lc"]
+        args:
+        - |
+          set -euo pipefail
+          mkdir -p /root/.ssh
+          if [ -f /ssh/id_rsa ]; then
+            cp /ssh/id_rsa /root/.ssh/id_rsa
+            chmod 600 /root/.ssh/id_rsa
+            # If known_hosts provided, use it; otherwise accept github.com
+            if [ -f /ssh/known_hosts ]; then
+              cp /ssh/known_hosts /root/.ssh/known_hosts
+            else
+              ssh-keyscan -t rsa github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+            fi
+          fi
+          git clone --depth 1 --branch "$GIT_REF" "$GIT_URL" /workspace/src
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: git-ssh
+          mountPath: /ssh
+          readOnly: true
+      containers:
+      - name: kaniko
+        image: gcr.io/kaniko-project/executor:debug
+        env:
+        - name: DOCKER_CONFIG
+          value: /kaniko/.docker
+        - name: COMPONENT
+          value: scraper  # override per build: scraper|extractor|notifier|summarizer
+        - name: CONTEXT_DIR
+          value: "$(COMPONENT)"  # expanded by shell
+        - name: DOCKERFILE
+          value: "$(COMPONENT)/Dockerfile"
+        - name: TAG
+          value: latest
+        - name: EXTRA_TAG
+          value: "nightly-$(date +%Y%m%d)"
+        - name: REGISTRY_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-builder-config
+              key: REGISTRY_PREFIX
+        command: ["/busybox/sh", "-lc"]
+        args:
+        - |
+          set -euo pipefail
+          DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
+          DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
+          echo "Building ${DEST1} and ${DEST2} from ${CONTEXT_DIR}"
+          /kaniko/executor \
+            --context /workspace/src/${CONTEXT_DIR} \
+            --dockerfile /workspace/src/${DOCKERFILE} \
+            --destination ${DEST1} \
+            --destination ${DEST2} \
+            --snapshotMode time \
+            --use-new-run \
+            --compressed-caching=false
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: docker-config
+          mountPath: /kaniko/.docker
+

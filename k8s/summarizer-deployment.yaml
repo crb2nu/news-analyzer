@@ -18,9 +18,11 @@ spec:
         app: news-analyzer
         component: summarizer
     spec:
+      imagePullSecrets:
+      - name: harbor-regcred
       containers:
       - name: summarizer
-        image: caedus90/news-analyzer-summarizer:latest
+        image: registry.harbor.lan/library/news-analyzer-summarizer:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
@@ -126,9 +128,11 @@ spec:
             app: news-analyzer
             component: summarizer-batch
         spec:
+          imagePullSecrets:
+          - name: harbor-regcred
           containers:
           - name: summarizer-batch
-            image: caedus90/news-analyzer-summarizer:latest
+            image: registry.harbor.lan/library/news-analyzer-summarizer:latest
             imagePullPolicy: Always
             command: ["python", "-m", "summarizer.batch"]
             env:

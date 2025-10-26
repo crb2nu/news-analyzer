@@ -1,0 +1,284 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: news-analyzer-ops-scripts
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops
+data:
+  health_check.py: |
+    import os
+    import socket
+    import sys
+    import time
+    from datetime import datetime
+
+    import requests
+    from kubernetes import client, config
+
+    try:
+      import psycopg2  # type: ignore
+    except Exception:  # pragma: no cover
+      psycopg2 = None
+
+    NAMESPACE = os.getenv("NAMESPACE", "news-analyzer")
+    NTFY_URL = os.getenv("NTFY_URL", "http://ntfy-service.news-analyzer.svc.cluster.local")
+    NTFY_TOPIC = os.getenv("NTFY_TOPIC", "news-analyzer-health")
+
+    SUMMARIZER_URL = os.getenv(
+        "SUMMARIZER_URL",
+        "http://news-analyzer-summarizer-service.news-analyzer.svc.cluster.local:8000/health",
+    )
+    MINIO_HEALTH_URL = os.getenv(
+        "MINIO_HEALTH_URL",
+        "http://minio-service.news-analyzer.svc.cluster.local:9000/minio/health/live",
+    )
+    DATABASE_URL = os.getenv("DATABASE_URL")
+
+    def load_kube_config():
+        try:
+            config.load_incluster_config()
+        except Exception:
+            config.load_kube_config()
+
+    def count_pods(v1: client.CoreV1Api):
+        pods = v1.list_namespaced_pod(NAMESPACE)
+        total = len(pods.items)
+        running = sum(1 for p in pods.items if (p.status and p.status.phase == "Running"))
+        return running, total
+
+    def count_pending_jobs(b1: client.BatchV1Api):
+        jobs = b1.list_namespaced_job(NAMESPACE)
+        pending = 0
+        for j in jobs.items:
+            s = j.status
+            # Consider pending if not succeeded yet
+            if not s or not s.succeeded:
+                pending += 1
+        return pending
+
+    def check_http(url: str, timeout: float = 5.0) -> bool:
+        try:
+            r = requests.get(url, timeout=timeout)
+            return r.ok
+        except Exception:
+            return False
+
+    def check_postgres(url: str, timeout: float = 5.0) -> bool:
+        if not url or psycopg2 is None:
+            return False
+        try:
+            conn = psycopg2.connect(url, connect_timeout=timeout)
+            cur = conn.cursor()
+            cur.execute("SELECT 1;")
+            cur.fetchone()
+            cur.close()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
+    def notify_ntfy(title: str, message: str, priority: int = 3, tags: str = "health"):
+        try:
+            topic_url = f"{NTFY_URL.rstrip('/')}/{NTFY_TOPIC}"
+            headers = {
+                "Title": title,
+                "Priority": str(priority),
+                "Tags": tags,
+            }
+            requests.post(topic_url, data=message.encode("utf-8"), headers=headers, timeout=5.0)
+        except Exception:
+            # Best-effort notification
+            pass
+
+    def main():
+        load_kube_config()
+        v1 = client.CoreV1Api()
+        b1 = client.BatchV1Api()
+
+        running, total = count_pods(v1)
+        pending_jobs = count_pending_jobs(b1)
+
+        summarizer_ok = check_http(SUMMARIZER_URL)
+        minio_ok = check_http(MINIO_HEALTH_URL)
+        pg_ok = check_postgres(DATABASE_URL) if DATABASE_URL else False
+
+        status = "healthy"
+        tags = ["health", "ok"]
+        priority = 1
+
+        if (running < total) or (not summarizer_ok) or (not minio_ok) or (not pg_ok):
+            status = "degraded"
+            tags = ["health", "warning"]
+            priority = 3
+
+        msg = (
+            f"Health: {status} | Pods: {running}/{total} | Pending Jobs: {pending_jobs} | "
+            f"Summarizer: {'OK' if summarizer_ok else 'FAIL'} | "
+            f"MinIO: {'OK' if minio_ok else 'FAIL'} | "
+            f"PostgreSQL: {'OK' if pg_ok else 'FAIL'} | "
+            f"Time: {datetime.utcnow().isoformat()}Z"
+        )
+
+        print(msg)
+        notify_ntfy("🏥 System Health Check", msg, priority=priority, tags=",".join(tags))
+
+    if __name__ == "__main__":
+        main()
+
+  cleanup.py: |
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    from kubernetes import client, config
+
+    NAMESPACE = os.getenv("NAMESPACE", "news-analyzer")
+    SUCCESS_TTL_DAYS = int(os.getenv("JOB_SUCCESS_TTL_DAYS", "7"))
+    FAILED_TTL_DAYS = int(os.getenv("JOB_FAILED_TTL_DAYS", "3"))
+
+    def load_kube_config():
+        try:
+            config.load_incluster_config()
+        except Exception:
+            config.load_kube_config()
+
+    def main():
+        load_kube_config()
+        b1 = client.BatchV1Api()
+        core = client.CoreV1Api()
+
+        now = datetime.now(timezone.utc)
+
+        # Clean completed jobs older than SUCCESS_TTL_DAYS
+        jobs = b1.list_namespaced_job(NAMESPACE).items
+        for j in jobs:
+            s = j.status
+            if s and s.succeeded:
+                ct = s.completion_time
+                if ct and (now - ct.replace(tzinfo=timezone.utc)) > timedelta(days=SUCCESS_TTL_DAYS):
+                    print(f"Deleting completed job {j.metadata.name}")
+                    try:
+                        b1.delete_namespaced_job(
+                            name=j.metadata.name,
+                            namespace=NAMESPACE,
+                            propagation_policy="Background",
+                        )
+                    except Exception as e:
+                        print(f"Failed to delete job {j.metadata.name}: {e}")
+
+        # Clean failed jobs older than FAILED_TTL_DAYS
+        for j in jobs:
+            s = j.status
+            if s and s.failed:
+                # Try lastTransitionTime on conditions
+                ts = None
+                if s.conditions:
+                    for c in s.conditions:
+                        if c.type == "Failed" and c.last_transition_time:
+                            ts = c.last_transition_time
+                            break
+                if ts and (now - ts.replace(tzinfo=timezone.utc)) > timedelta(days=FAILED_TTL_DAYS):
+                    print(f"Deleting failed job {j.metadata.name}")
+                    try:
+                        b1.delete_namespaced_job(
+                            name=j.metadata.name,
+                            namespace=NAMESPACE,
+                            propagation_policy="Background",
+                        )
+                    except Exception as e:
+                        print(f"Failed to delete failed job {j.metadata.name}: {e}")
+
+        # Delete evicted pods
+        pods = core.list_namespaced_pod(NAMESPACE).items
+        for p in pods:
+            st = p.status
+            if st and st.phase == "Failed" and st.reason == "Evicted":
+                print(f"Deleting evicted pod {p.metadata.name}")
+                try:
+                    core.delete_namespaced_pod(p.metadata.name, NAMESPACE)
+                except Exception as e:
+                    print(f"Failed to delete pod {p.metadata.name}: {e}")
+
+    if __name__ == "__main__":
+        main()
+
+  deployer.py: |
+    import os
+    from kubernetes import client, config
+
+    NAMESPACE = os.getenv("NAMESPACE", "news-analyzer")
+    COMPONENT = os.getenv("COMPONENT", "all")  # scraper|extractor|notifier|summarizer|all
+    TAG = os.getenv("IMAGE_TAG", "latest")
+    # Default to existing Docker Hub repo used in manifests; override to ghcr if desired
+    IMAGE_PREFIX = os.getenv("IMAGE_PREFIX", "caedus90/news-analyzer")
+
+    def load_kube_config():
+        try:
+            config.load_incluster_config()
+        except Exception:
+            config.load_kube_config()
+
+    def image_for(component: str) -> str:
+        return f"{IMAGE_PREFIX}-{component}:{TAG}"
+
+    def patch_cronjob_image(batch: client.BatchV1Api, name: str, container: str, image: str):
+        body = {
+            "spec": {
+                "jobTemplate": {
+                    "spec": {
+                        "template": {
+                            "spec": {
+                                "containers": [
+                                    {"name": container, "image": image}
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        batch.patch_namespaced_cron_job(name=name, namespace=NAMESPACE, body=body)
+
+    def patch_deployment_image(apps: client.AppsV1Api, name: str, container: str, image: str):
+        body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {"name": container, "image": image}
+                        ]
+                    }
+                }
+            }
+        }
+        apps.patch_namespaced_deployment(name=name, namespace=NAMESPACE, body=body)
+
+    def main():
+        load_kube_config()
+        batch = client.BatchV1Api()
+        apps = client.AppsV1Api()
+
+        targets = []
+        if COMPONENT in ("all", "scraper"):
+            targets.append(("cronjob", "news-analyzer-scraper", "scraper"))
+        if COMPONENT in ("all", "extractor"):
+            targets.append(("cronjob", "news-analyzer-extractor", "extractor"))
+        if COMPONENT in ("all", "notifier"):
+            targets.append(("cronjob", "news-analyzer-notifier", "notifier"))
+        if COMPONENT in ("all", "summarizer"):
+            targets.append(("deployment", "news-analyzer-summarizer", "summarizer"))
+
+        for kind, name, container in targets:
+            img = image_for(container)
+            print(f"Updating {kind}/{name} container {container} -> {img}")
+            if kind == "cronjob":
+                patch_cronjob_image(batch, name, container, img)
+            else:
+                patch_deployment_image(apps, name, container, img)
+
+        print("Done.")
+
+    if __name__ == "__main__":
+        main()
+

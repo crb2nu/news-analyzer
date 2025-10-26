@@ -1,12 +1,12 @@
-name: Scheduled Tasks
+name: Scheduled Tasks (disabled)
 
 on:
-  schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
+  # Disabled schedule; keep manual dispatch only
   workflow_dispatch:
 
 jobs:
   health-check:
+    if: false  # handled in-cluster via CronJob
     runs-on: ubuntu-latest
     
     steps:
@@ -85,6 +85,7 @@ jobs:
           http://ntfy.news-analyzer.svc.cluster.local/news-analyzer-health || true
 
   cleanup-old-jobs:
+    if: false  # handled in-cluster via CronJob
     runs-on: ubuntu-latest
     
     steps:
@@ -112,8 +113,8 @@ jobs:
           xargs -r kubectl delete pod -n news-analyzer
 
   trigger-scraper:
+    if: false
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'  # Only run on schedule, not manual dispatch
     
     steps:
     - name: Trigger scraper job

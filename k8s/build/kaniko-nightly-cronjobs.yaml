@@ -1,0 +1,420 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaniko-scraper-nightly
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: builder
+spec:
+  schedule: "0 3 * * *"  # 03:00 local nightly
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: builder
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          volumes:
+          - name: workspace
+            emptyDir: {}
+          - name: docker-config
+            secret:
+              secretName: harbor-regcred
+              items:
+              - key: .dockerconfigjson
+                path: config.json
+          - name: git-ssh
+            secret:
+              secretName: git-ssh
+              optional: true
+          initContainers:
+          - name: fetch-source
+            image: alpine/git:2.45.2
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef:
+                name: news-analyzer-builder-config
+            command: ["/bin/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              mkdir -p /root/.ssh
+              if [ -f /ssh/id_rsa ]; then
+                cp /ssh/id_rsa /root/.ssh/id_rsa
+                chmod 600 /root/.ssh/id_rsa
+                if [ -f /ssh/known_hosts ]; then
+                  cp /ssh/known_hosts /root/.ssh/known_hosts
+                else
+                  ssh-keyscan -t rsa github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+                fi
+              fi
+              git clone --depth 1 --branch "$GIT_REF" "$GIT_URL" /workspace/src
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: git-ssh
+              mountPath: /ssh
+              readOnly: true
+          containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:debug
+            env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+            - name: COMPONENT
+              value: scraper
+            - name: CONTEXT_DIR
+              value: scraper
+            - name: DOCKERFILE
+              value: scraper/Dockerfile
+            - name: TAG
+              value: latest
+            - name: EXTRA_TAG
+              value: "nightly-$(date +%Y%m%d)"
+            - name: REGISTRY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-builder-config
+                  key: REGISTRY_PREFIX
+            command: ["/busybox/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
+              DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
+              /kaniko/executor \
+                --context /workspace/src/${CONTEXT_DIR} \
+                --dockerfile /workspace/src/${DOCKERFILE} \
+                --destination ${DEST1} \
+                --destination ${DEST2} \
+                --snapshotMode time \
+                --use-new-run \
+                --compressed-caching=false
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: docker-config
+              mountPath: /kaniko/.docker
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaniko-extractor-nightly
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: builder
+spec:
+  schedule: "10 3 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: builder
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          volumes:
+          - name: workspace
+            emptyDir: {}
+          - name: docker-config
+            secret:
+              secretName: harbor-regcred
+              items:
+              - key: .dockerconfigjson
+                path: config.json
+          - name: git-ssh
+            secret:
+              secretName: git-ssh
+              optional: true
+          initContainers:
+          - name: fetch-source
+            image: alpine/git:2.45.2
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef:
+                name: news-analyzer-builder-config
+            command: ["/bin/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              mkdir -p /root/.ssh
+              if [ -f /ssh/id_rsa ]; then
+                cp /ssh/id_rsa /root/.ssh/id_rsa
+                chmod 600 /root/.ssh/id_rsa
+                if [ -f /ssh/known_hosts ]; then
+                  cp /ssh/known_hosts /root/.ssh/known_hosts
+                else
+                  ssh-keyscan -t rsa github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+                fi
+              fi
+              git clone --depth 1 --branch "$GIT_REF" "$GIT_URL" /workspace/src
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: git-ssh
+              mountPath: /ssh
+              readOnly: true
+          containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:debug
+            env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+            - name: COMPONENT
+              value: extractor
+            - name: CONTEXT_DIR
+              value: extractor
+            - name: DOCKERFILE
+              value: extractor/Dockerfile
+            - name: TAG
+              value: latest
+            - name: EXTRA_TAG
+              value: "nightly-$(date +%Y%m%d)"
+            - name: REGISTRY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-builder-config
+                  key: REGISTRY_PREFIX
+            command: ["/busybox/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
+              DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
+              /kaniko/executor \
+                --context /workspace/src/${CONTEXT_DIR} \
+                --dockerfile /workspace/src/${DOCKERFILE} \
+                --destination ${DEST1} \
+                --destination ${DEST2} \
+                --snapshotMode time \
+                --use-new-run \
+                --compressed-caching=false
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: docker-config
+              mountPath: /kaniko/.docker
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaniko-notifier-nightly
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: builder
+spec:
+  schedule: "20 3 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: builder
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          volumes:
+          - name: workspace
+            emptyDir: {}
+          - name: docker-config
+            secret:
+              secretName: harbor-regcred
+              items:
+              - key: .dockerconfigjson
+                path: config.json
+          - name: git-ssh
+            secret:
+              secretName: git-ssh
+              optional: true
+          initContainers:
+          - name: fetch-source
+            image: alpine/git:2.45.2
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef:
+                name: news-analyzer-builder-config
+            command: ["/bin/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              mkdir -p /root/.ssh
+              if [ -f /ssh/id_rsa ]; then
+                cp /ssh/id_rsa /root/.ssh/id_rsa
+                chmod 600 /root/.ssh/id_rsa
+                if [ -f /ssh/known_hosts ]; then
+                  cp /ssh/known_hosts /root/.ssh/known_hosts
+                else
+                  ssh-keyscan -t rsa github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+                fi
+              fi
+              git clone --depth 1 --branch "$GIT_REF" "$GIT_URL" /workspace/src
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: git-ssh
+              mountPath: /ssh
+              readOnly: true
+          containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:debug
+            env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+            - name: COMPONENT
+              value: notifier
+            - name: CONTEXT_DIR
+              value: notifier
+            - name: DOCKERFILE
+              value: notifier/Dockerfile
+            - name: TAG
+              value: latest
+            - name: EXTRA_TAG
+              value: "nightly-$(date +%Y%m%d)"
+            - name: REGISTRY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-builder-config
+                  key: REGISTRY_PREFIX
+            command: ["/busybox/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
+              DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
+              /kaniko/executor \
+                --context /workspace/src/${CONTEXT_DIR} \
+                --dockerfile /workspace/src/${DOCKERFILE} \
+                --destination ${DEST1} \
+                --destination ${DEST2} \
+                --snapshotMode time \
+                --use-new-run \
+                --compressed-caching=false
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: docker-config
+              mountPath: /kaniko/.docker
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaniko-summarizer-nightly
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: builder
+spec:
+  schedule: "30 3 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: builder
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          volumes:
+          - name: workspace
+            emptyDir: {}
+          - name: docker-config
+            secret:
+              secretName: harbor-regcred
+              items:
+              - key: .dockerconfigjson
+                path: config.json
+          - name: git-ssh
+            secret:
+              secretName: git-ssh
+              optional: true
+          initContainers:
+          - name: fetch-source
+            image: alpine/git:2.45.2
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef:
+                name: news-analyzer-builder-config
+            command: ["/bin/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              mkdir -p /root/.ssh
+              if [ -f /ssh/id_rsa ]; then
+                cp /ssh/id_rsa /root/.ssh/id_rsa
+                chmod 600 /root/.ssh/id_rsa
+                if [ -f /ssh/known_hosts ]; then
+                  cp /ssh/known_hosts /root/.ssh/known_hosts
+                else
+                  ssh-keyscan -t rsa github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+                fi
+              fi
+              git clone --depth 1 --branch "$GIT_REF" "$GIT_URL" /workspace/src
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: git-ssh
+              mountPath: /ssh
+              readOnly: true
+          containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:debug
+            env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+            - name: COMPONENT
+              value: summarizer
+            - name: CONTEXT_DIR
+              value: summarizer
+            - name: DOCKERFILE
+              value: summarizer/Dockerfile
+            - name: TAG
+              value: latest
+            - name: EXTRA_TAG
+              value: "nightly-$(date +%Y%m%d)"
+            - name: REGISTRY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-builder-config
+                  key: REGISTRY_PREFIX
+            command: ["/busybox/sh", "-lc"]
+            args:
+            - |
+              set -euo pipefail
+              DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
+              DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
+              /kaniko/executor \
+                --context /workspace/src/${CONTEXT_DIR} \
+                --dockerfile /workspace/src/${DOCKERFILE} \
+                --destination ${DEST1} \
+                --destination ${DEST2} \
+                --snapshotMode time \
+                --use-new-run \
+                --compressed-caching=false
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: docker-config
+              mountPath: /kaniko/.docker
+

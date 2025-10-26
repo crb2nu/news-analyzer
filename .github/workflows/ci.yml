@@ -1,9 +1,6 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline (disabled)
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+  # Disabled automatic triggers; keep manual dispatch only
   workflow_dispatch:
 
 env:

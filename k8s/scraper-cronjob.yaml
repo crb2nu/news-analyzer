@@ -23,9 +23,11 @@ spec:
             component: scraper
         spec:
           restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
           containers:
           - name: scraper
-            image: caedus90/news-analyzer-scraper:latest
+            image: registry.harbor.lan/library/news-analyzer-scraper:latest
             imagePullPolicy: Always
             command:
             - /bin/sh
@@ -143,9 +145,11 @@ spec:
             component: auth-refresh
         spec:
           restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
           containers:
           - name: auth-refresh
-            image: caedus90/news-analyzer-scraper:latest
+            image: registry.harbor.lan/library/news-analyzer-scraper:latest
             imagePullPolicy: Always
             command:
             - python

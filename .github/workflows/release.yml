@@ -1,9 +1,7 @@
-name: Release
+name: Release (disabled auto)
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  # Disabled tag-push trigger; keep manual dispatch only
   workflow_dispatch:
     inputs:
       version:
@@ -126,7 +124,7 @@ jobs:
   deploy-release:
     needs: [create-release, build-release-images]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'  # Only auto-deploy on tag push; secrets check is step-gated
+    if: false  # Disabled auto-deploy in GitHub; handled in-cluster
     
     steps:
     - uses: actions/checkout@v4

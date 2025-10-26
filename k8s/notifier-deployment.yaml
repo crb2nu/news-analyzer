@@ -23,9 +23,11 @@ spec:
             component: notifier-daily
         spec:
           restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
           containers:
           - name: notifier-daily
-            image: harbor.lan/news-analyzer/notifier:latest
+            image: registry.harbor.lan/library/news-analyzer-notifier:latest
             imagePullPolicy: Always
             command:
             - python
@@ -99,9 +101,11 @@ spec:
         type: manual
     spec:
       restartPolicy: Never
+      imagePullSecrets:
+      - name: harbor-regcred
       containers:
       - name: notifier-manual
-        image: harbor.lan/news-analyzer/notifier:latest
+        image: registry.harbor.lan/library/news-analyzer-notifier:latest
         imagePullPolicy: Always
         command:
         - python

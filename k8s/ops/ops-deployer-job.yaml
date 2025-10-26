@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: news-analyzer-ops-deployer
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops-deployer
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: ops-deployer
+    spec:
+      serviceAccountName: news-analyzer-ops-bot
+      restartPolicy: Never
+      containers:
+      - name: deployer
+        image: python:3.11-slim
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: NAMESPACE
+          value: news-analyzer
+        - name: COMPONENT
+          value: "all"        # override at apply: all|scraper|extractor|notifier|summarizer
+        - name: IMAGE_TAG
+          value: "latest"     # override to the desired tag
+        - name: IMAGE_PREFIX
+          value: "registry.harbor.lan/library/news-analyzer"  # default Harbor prefix
+        command:
+        - /bin/bash
+        - -lc
+        - |
+          set -euo pipefail
+          echo "Deploying ${COMPONENT} with tag ${IMAGE_TAG} in ${NAMESPACE} ..."
+          pip install --no-cache-dir --quiet kubernetes
+          python /app/deployer.py
+        volumeMounts:
+        - name: ops-scripts
+          mountPath: /app
+      volumes:
+      - name: ops-scripts
+        configMap:
+          name: news-analyzer-ops-scripts

@@ -19,9 +19,11 @@ spec:
             app: news-analyzer
             component: notifier
         spec:
+          imagePullSecrets:
+          - name: harbor-regcred
           containers:
           - name: notifier
-            image: caedus90/news-analyzer-notifier:latest
+            image: registry.harbor.lan/library/news-analyzer-notifier:latest
             imagePullPolicy: Always
             command: ["python", "-m", "notifier.ntfy_notifier"]
             env:

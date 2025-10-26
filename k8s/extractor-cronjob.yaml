@@ -23,9 +23,11 @@ spec:
             component: extractor
         spec:
           restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
           containers:
           - name: extractor
-            image: caedus90/news-analyzer-extractor:latest
+            image: registry.harbor.lan/library/news-analyzer-extractor:latest
             imagePullPolicy: Always
             command:
             - /bin/sh
@@ -94,9 +96,11 @@ spec:
         type: manual
     spec:
       restartPolicy: Never
+      imagePullSecrets:
+      - name: harbor-regcred
       containers:
       - name: extractor
-        image: caedus90/news-analyzer-extractor:latest
+        image: registry.harbor.lan/library/news-analyzer-extractor:latest
         imagePullPolicy: Always
         command:
         - /bin/sh

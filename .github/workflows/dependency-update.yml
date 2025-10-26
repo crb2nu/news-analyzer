@@ -1,8 +1,7 @@
-name: Dependency Update
+name: Dependency Update (manual)
 
 on:
-  schedule:
-    - cron: '0 8 * * 1'  # Every Monday at 8 AM UTC
+  # Disabled schedule; keep manual dispatch only
   workflow_dispatch:
 
 jobs:

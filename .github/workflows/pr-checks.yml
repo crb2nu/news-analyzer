@@ -1,8 +1,8 @@
-name: Pull Request Checks
+name: Pull Request Checks (manual)
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  # Disabled PR triggers; keep manual dispatch only
+  workflow_dispatch:
 
 jobs:
   code-quality:

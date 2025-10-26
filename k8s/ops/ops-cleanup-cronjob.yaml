@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-ops-cleanup
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops-cleanup
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: ops-cleanup
+        spec:
+          serviceAccountName: news-analyzer-ops-bot
+          restartPolicy: OnFailure
+          containers:
+          - name: cleanup
+            image: python:3.11-slim
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: NAMESPACE
+              value: news-analyzer
+            - name: JOB_SUCCESS_TTL_DAYS
+              value: "7"
+            - name: JOB_FAILED_TTL_DAYS
+              value: "3"
+            command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              pip install --no-cache-dir --quiet kubernetes
+              python /app/cleanup.py
+            volumeMounts:
+            - name: ops-scripts
+              mountPath: /app
+          volumes:
+          - name: ops-scripts
+            configMap:
+              name: news-analyzer-ops-scripts
+

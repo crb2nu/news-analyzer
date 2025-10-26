@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: news-analyzer-ops-bot
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: news-analyzer-ops-role
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "delete", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: news-analyzer-ops-binding
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops
+subjects:
+  - kind: ServiceAccount
+    name: news-analyzer-ops-bot
+    namespace: news-analyzer
+roleRef:
+  kind: Role
+  name: news-analyzer-ops-role
+  apiGroup: rbac.authorization.k8s.io
+

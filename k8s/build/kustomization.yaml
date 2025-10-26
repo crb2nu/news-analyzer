@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: news-analyzer
+resources:
+  - ../namespace.yaml
+  - ../configmap.yaml
+  - ../secrets.yaml
+  - builder-configmap.yaml
+  - kaniko-nightly-cronjobs.yaml
+  # kaniko-build-job.yaml can be applied on-demand
+
