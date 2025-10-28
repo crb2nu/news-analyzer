@@ -76,13 +76,11 @@ spec:
         - name: COMPONENT
           value: scraper  # override per build: scraper|extractor|notifier|summarizer
         - name: CONTEXT_DIR
-          value: "$(COMPONENT)"  # expanded by shell
+          value: scraper
         - name: DOCKERFILE
-          value: "$(COMPONENT)/Dockerfile"
+          value: scraper/Dockerfile
         - name: TAG
           value: latest
-        - name: EXTRA_TAG
-          value: "nightly-$(date +%Y%m%d)"
         - name: REGISTRY_PREFIX
           valueFrom:
             configMapKeyRef:
@@ -92,6 +90,10 @@ spec:
         args:
         - |
           set -euo pipefail
+          # Allow overriding COMPONENT/TAG at runtime via kubectl set env
+          CONTEXT_DIR=${CONTEXT_DIR:-$COMPONENT}
+          DOCKERFILE=${DOCKERFILE:-$COMPONENT/Dockerfile}
+          EXTRA_TAG=nightly-$(date +%Y%m%d)
           DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
           DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
           echo "Building ${DEST1} and ${DEST2} from ${CONTEXT_DIR}"
@@ -102,10 +104,10 @@ spec:
             --destination ${DEST2} \
             --snapshotMode time \
             --use-new-run \
-            --compressed-caching=false
+            --compressed-caching=false \
+            --skip-tls-verify-registry=registry.harbor.lan
         volumeMounts:
         - name: workspace
           mountPath: /workspace
         - name: docker-config
           mountPath: /kaniko/.docker
-

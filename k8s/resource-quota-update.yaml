@@ -10,5 +10,5 @@ spec:
     limits.cpu: "8"
     limits.memory: "16Gi"
     persistentvolumeclaims: "10"
-    count/jobs.batch: "10"
-    count/cronjobs.batch: "10"
+    count/jobs.batch: "20"
+    count/cronjobs.batch: "12"

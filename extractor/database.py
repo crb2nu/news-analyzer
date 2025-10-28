@@ -21,8 +21,12 @@ import asyncio
 from asyncpg import Pool, Connection
 from contextlib import asynccontextmanager
 
-from .pdf_extractor import Article as PDFArticle
-from .html_extractor import HTMLArticle
+try:
+    from .pdf_extractor import Article as PDFArticle
+    from .html_extractor import HTMLArticle
+except Exception:
+    from pdf_extractor import Article as PDFArticle
+    from html_extractor import HTMLArticle
 
 logger = logging.getLogger(__name__)
 

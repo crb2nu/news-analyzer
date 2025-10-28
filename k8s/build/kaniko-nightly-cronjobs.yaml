@@ -76,8 +76,6 @@ spec:
               value: scraper/Dockerfile
             - name: TAG
               value: latest
-            - name: EXTRA_TAG
-              value: "nightly-$(date +%Y%m%d)"
             - name: REGISTRY_PREFIX
               valueFrom:
                 configMapKeyRef:
@@ -87,6 +85,7 @@ spec:
             args:
             - |
               set -euo pipefail
+              EXTRA_TAG=nightly-$(date +%Y%m%d)
               DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
               DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
               /kaniko/executor \
@@ -96,7 +95,8 @@ spec:
                 --destination ${DEST2} \
                 --snapshotMode time \
                 --use-new-run \
-                --compressed-caching=false
+                --compressed-caching=false \
+                --skip-tls-verify-registry=registry.harbor.lan
             volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -181,8 +181,6 @@ spec:
               value: extractor/Dockerfile
             - name: TAG
               value: latest
-            - name: EXTRA_TAG
-              value: "nightly-$(date +%Y%m%d)"
             - name: REGISTRY_PREFIX
               valueFrom:
                 configMapKeyRef:
@@ -192,6 +190,7 @@ spec:
             args:
             - |
               set -euo pipefail
+              EXTRA_TAG=nightly-$(date +%Y%m%d)
               DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
               DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
               /kaniko/executor \
@@ -201,7 +200,8 @@ spec:
                 --destination ${DEST2} \
                 --snapshotMode time \
                 --use-new-run \
-                --compressed-caching=false
+                --compressed-caching=false \
+                --skip-tls-verify-registry=registry.harbor.lan
             volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -286,8 +286,6 @@ spec:
               value: notifier/Dockerfile
             - name: TAG
               value: latest
-            - name: EXTRA_TAG
-              value: "nightly-$(date +%Y%m%d)"
             - name: REGISTRY_PREFIX
               valueFrom:
                 configMapKeyRef:
@@ -297,6 +295,7 @@ spec:
             args:
             - |
               set -euo pipefail
+              EXTRA_TAG=nightly-$(date +%Y%m%d)
               DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
               DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
               /kaniko/executor \
@@ -306,7 +305,8 @@ spec:
                 --destination ${DEST2} \
                 --snapshotMode time \
                 --use-new-run \
-                --compressed-caching=false
+                --compressed-caching=false \
+                --skip-tls-verify-registry=registry.harbor.lan
             volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -391,8 +391,6 @@ spec:
               value: summarizer/Dockerfile
             - name: TAG
               value: latest
-            - name: EXTRA_TAG
-              value: "nightly-$(date +%Y%m%d)"
             - name: REGISTRY_PREFIX
               valueFrom:
                 configMapKeyRef:
@@ -402,6 +400,7 @@ spec:
             args:
             - |
               set -euo pipefail
+              EXTRA_TAG=nightly-$(date +%Y%m%d)
               DEST1=${REGISTRY_PREFIX}-${COMPONENT}:${TAG}
               DEST2=${REGISTRY_PREFIX}-${COMPONENT}:${EXTRA_TAG}
               /kaniko/executor \
@@ -411,10 +410,10 @@ spec:
                 --destination ${DEST2} \
                 --snapshotMode time \
                 --use-new-run \
-                --compressed-caching=false
+                --compressed-caching=false \
+                --skip-tls-verify-registry=registry.harbor.lan
             volumeMounts:
             - name: workspace
               mountPath: /workspace
             - name: docker-config
               mountPath: /kaniko/.docker
-

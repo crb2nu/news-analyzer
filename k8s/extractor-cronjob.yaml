@@ -34,7 +34,7 @@ spec:
             - -c
             - |
               DATE=$(date +%Y-%m-%d)
-              python -m extractor.processor --date $DATE
+              python -m processor --date $DATE
             env:
             - name: DATABASE_URL
               valueFrom:
@@ -73,6 +73,7 @@ spec:
               limits:
                 memory: "2Gi"
                 cpu: "1000m"
+          volumes: []
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
@@ -107,7 +108,7 @@ spec:
         - -c
         - |
           DATE=$(date +%Y-%m-%d)
-          python -m extractor.processor --date $DATE --force
+          python -m processor --date $DATE --force
         env:
         - name: DATABASE_URL
           valueFrom:
@@ -146,6 +147,7 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
+      volumes: []
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

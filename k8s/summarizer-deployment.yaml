@@ -24,6 +24,7 @@ spec:
       - name: summarizer
         image: registry.harbor.lan/library/news-analyzer-summarizer:latest
         imagePullPolicy: Always
+        command: ["python", "-m", "api"]
         ports:
         - containerPort: 8000
           name: http
@@ -84,6 +85,7 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 5
+      volumes: []
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -134,7 +136,7 @@ spec:
           - name: summarizer-batch
             image: registry.harbor.lan/library/news-analyzer-summarizer:latest
             imagePullPolicy: Always
-            command: ["python", "-m", "summarizer.batch"]
+            command: ["python", "-m", "batch"]
             env:
             - name: DATABASE_URL
               valueFrom:
@@ -182,6 +184,7 @@ spec:
               limits:
                 memory: "1Gi"
                 cpu: "500m"
+          volumes: []
           restartPolicy: OnFailure
           securityContext:
             runAsNonRoot: true
