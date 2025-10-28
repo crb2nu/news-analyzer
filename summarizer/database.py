@@ -228,3 +228,100 @@ class DatabaseManager:
                     'total_duplicates': sum(s['total_duplicates'] for s in stats),
                 }
             }
+
+    async def get_feed_dates(self, limit: int = 14) -> List[Dict]:
+        """Return recent dates that have extracted/summarized articles with counts.
+
+        Args:
+            limit: number of most recent days to return
+
+        Returns:
+            List of dicts with keys: date, total, summarized
+        """
+        sql = """
+        SELECT
+            DATE(a.date_extracted) AS day,
+            COUNT(*) AS total,
+            SUM(CASE WHEN a.processing_status = 'summarized' THEN 1 ELSE 0 END) AS summarized
+        FROM articles a
+        GROUP BY day
+        ORDER BY day DESC
+        LIMIT $1
+        """
+
+        async with self.get_connection() as conn:
+            rows = await conn.fetch(sql, limit)
+            return [
+                {
+                    'date': row['day'].isoformat(),
+                    'total': row['total'],
+                    'summarized': row['summarized'],
+                }
+                for row in rows
+            ]
+
+    async def get_feed_articles(
+        self,
+        target_date: date,
+        limit: int = 50,
+        section: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> List[Dict]:
+        """Return articles with their brief summaries for a given date.
+
+        Joins articles to summaries (prefers summary_type = 'brief').
+        """
+        params: List = [target_date]
+        filters = ["DATE(a.date_extracted) = $1"]
+
+        if section:
+            params.append(section)
+            filters.append(f"a.section = ${len(params)}")
+
+        if search:
+            # Simple ILIKE search over title/content
+            params.append(f"%{search}%")
+            params.append(f"%{search}%")
+            filters.append(
+                f"(a.title ILIKE ${len(params)-1} OR a.content ILIKE ${len(params)})"
+            )
+
+        params.append(limit)
+
+        sql = f"""
+        SELECT
+            a.id,
+            a.title,
+            a.section,
+            a.url,
+            a.source_url,
+            a.date_published,
+            a.word_count,
+            COALESCE(s.summary_text, '') AS summary_text
+        FROM articles a
+        LEFT JOIN LATERAL (
+            SELECT summary_text
+            FROM summaries s
+            WHERE s.article_id = a.id AND s.summary_type = 'brief'
+            ORDER BY s.date_created DESC
+            LIMIT 1
+        ) s ON TRUE
+        WHERE {' AND '.join(filters)}
+        ORDER BY COALESCE(a.date_published, a.date_extracted) DESC, a.id DESC
+        LIMIT ${len(params)}
+        """
+
+        async with self.get_connection() as conn:
+            rows = await conn.fetch(sql, *params)
+            results: List[Dict] = []
+            for row in rows:
+                results.append({
+                    'id': row['id'],
+                    'title': row['title'],
+                    'section': row['section'] or 'General',
+                    'summary': row['summary_text'] or '',
+                    'url': row['url'] or row['source_url'],
+                    'date_published': row['date_published'].isoformat() if row['date_published'] else None,
+                    'word_count': row['word_count'],
+                })
+            return results

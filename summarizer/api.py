@@ -12,6 +12,8 @@ from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import openai
@@ -369,6 +371,18 @@ def get_service() -> SummarizationService:
 
 
 # API Routes
+@app.get("/")
+async def serve_index():
+    """Serve the simple frontend index page."""
+    return FileResponse(path=str((__file__).replace("api.py", "static/index.html")))
+
+# Mount static assets (JS/CSS)
+app.mount(
+    "/static",
+    StaticFiles(directory=str((__file__).replace("api.py", "static"))),
+    name="static",
+)
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -432,6 +446,44 @@ async def get_summarization_stats(
         "summary": stats.get("summary", {}),
         "daily_stats": stats.get("daily_stats", [])
     }
+
+
+# -------- Feed Endpoints (for simple frontend) --------
+@app.get("/feed/dates")
+async def get_feed_dates(
+    limit: int = 14,
+    service: SummarizationService = Depends(get_service)
+):
+    """Return recent dates that have articles with counts."""
+    data = await service.db_manager.get_feed_dates(limit)
+    return {"dates": data}
+
+
+@app.get("/feed")
+async def get_feed(
+    date_str: Optional[str] = None,
+    limit: int = 50,
+    section: Optional[str] = None,
+    q: Optional[str] = None,
+    service: SummarizationService = Depends(get_service)
+):
+    """Return a list of articles + summaries for the selected date."""
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.fromisoformat(date_str).date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format; use YYYY-MM-DD")
+    else:
+        target_date = date.today()
+
+    items = await service.db_manager.get_feed_articles(
+        target_date=target_date,
+        limit=limit,
+        section=section,
+        search=q,
+    )
+    return {"date": target_date.isoformat(), "count": len(items), "items": items}
 
 
 if __name__ == "__main__":

@@ -73,9 +73,19 @@ class EditionDiscoverer:
                 # Get proxy configuration
                 proxy_config = self.settings.get_playwright_proxy()
                 
-                browser = p.chromium.launch(
+                # Prefer Firefox in containers for stability
+                browser = p.firefox.launch(
                     headless=True,
-                    proxy=proxy_config
+                    proxy=proxy_config,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-software-rasterizer",
+                        "--single-process",
+                        "--no-zygote",
+                    ],
                 )
                 
                 context = browser.new_context(storage_state=str(self.storage_path))

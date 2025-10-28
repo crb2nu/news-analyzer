@@ -34,7 +34,7 @@ spec:
             - -c
             - |
               DATE=$(date +%Y-%m-%d)
-              python -m scraper.downloader --date $DATE
+              python -m scraper.downloader --date $DATE --storage /app/storage/storage_state.json
             env:
             - name: EEDITION_USER
               valueFrom:

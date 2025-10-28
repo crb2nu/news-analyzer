@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>News Analyzer • Daily Feed</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="header">
+      <h1>📰 SW VA News Feed</h1>
+      <div class="controls">
+        <label>
+          Date
+          <select id="dateSelect"></select>
+        </label>
+        <label>
+          Section
+          <select id="sectionSelect">
+            <option value="">All</option>
+            <option>Local</option>
+            <option>News</option>
+            <option>Sports</option>
+            <option>Business</option>
+            <option>Opinion</option>
+            <option>Obituaries</option>
+          </select>
+        </label>
+        <input id="search" type="search" placeholder="Search title/text" />
+        <button id="refreshBtn">Refresh</button>
+      </div>
+    </header>
+
+    <main id="feed" class="feed"></main>
+
+    <footer class="footer">
+      <span id="status">Loading…</span>
+      <a href="/health" target="_blank" rel="noopener">API health</a>
+    </footer>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+  </html>
+

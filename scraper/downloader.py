@@ -34,30 +34,65 @@ class DownloadCache:
         self._init_minio()
     
     def _init_minio(self):
-        """Initialize MinIO client"""
+        """Initialize MinIO client with sensible in-cluster defaults.
+
+        - Treat Kubernetes service DNS (".svc"/".svc.cluster.local") as HTTP (secure=False)
+          and default to port 80 if none provided.
+        - For localhost/.lan also use HTTP.
+        - Otherwise default to HTTPS on port 9000 when port is omitted.
+        """
         try:
-            # Parse endpoint to separate host and port
-            endpoint_parts = self.settings.minio_endpoint.split(':')
-            host = endpoint_parts[0]
-            port = int(endpoint_parts[1]) if len(endpoint_parts) > 1 else 9000
-            
-            # Determine if we should use secure connection
-            secure = not (host.startswith('localhost') or host.endswith('.lan'))
-            
+            ep = self.settings.minio_endpoint.strip()
+            # Strip scheme if given
+            if ep.startswith("http://"):
+                ep = ep[len("http://"):]
+                default_secure = False
+            elif ep.startswith("https://"):
+                ep = ep[len("https://"):]
+                default_secure = True
+            else:
+                default_secure = None  # decide below
+
+            # Split host:port
+            if ":" in ep:
+                host, port_str = ep.rsplit(":", 1)
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    host, port = ep, None
+            else:
+                host, port = ep, None
+
+            # Heuristics for secure + default port
+            is_k8s_svc = host.endswith(".svc") or host.endswith(".svc.cluster.local")
+            is_local = host.startswith("localhost") or host.endswith(".lan")
+
+            if default_secure is None:
+                secure = not (is_k8s_svc or is_local)
+            else:
+                secure = default_secure
+
+            if port is None:
+                port = 80 if not secure else 9000
+
+            endpoint = f"{host}:{port}"
+
             self.minio_client = Minio(
-                f"{host}:{port}",
+                endpoint,
                 access_key=self.settings.minio_access_key,
                 secret_key=self.settings.minio_secret_key,
-                secure=secure
+                secure=secure,
             )
-            
+
             # Create bucket if it doesn't exist
             if not self.minio_client.bucket_exists(self.settings.minio_bucket):
                 self.minio_client.make_bucket(self.settings.minio_bucket)
                 logger.info(f"Created bucket: {self.settings.minio_bucket}")
-            
-            logger.info("MinIO client initialized successfully")
-            
+
+            logger.info(
+                "MinIO client initialized (endpoint=%s secure=%s)", endpoint, secure
+            )
+
         except Exception as e:
             logger.error(f"Failed to initialize MinIO client: {str(e)}")
             self.minio_client = None

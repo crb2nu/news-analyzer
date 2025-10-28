@@ -26,6 +26,18 @@ RUN apt-get update && apt-get install -y \
     libatspi2.0-0 \
     libxss1 \
     libasound2 \
+    # Extra for Firefox/GTK headless
+    libgtk-3-0 \
+    libxcb-shm0 \
+    libx11-xcb1 \
+    libgdk-pixbuf-2.0-0 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libcairo-gobject2 \
+    libfreetype6 \
+    libfontconfig1 \
+    libxcursor1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
@@ -46,9 +58,9 @@ RUN poetry config virtualenvs.in-project true && \
     poetry install --only=main --no-interaction --no-ansi && \
     rm -rf $POETRY_CACHE_DIR
 
-# Install Playwright browsers
-RUN /app/.venv/bin/playwright install chromium && \
-    /app/.venv/bin/playwright install-deps chromium
+# Install Playwright browsers (chromium + firefox for stability)
+RUN /app/.venv/bin/playwright install chromium firefox && \
+    /app/.venv/bin/playwright install-deps chromium firefox
 
 # Production stage
 FROM python:3.11-slim as production
@@ -76,6 +88,17 @@ RUN apt-get update && apt-get install -y \
     libatspi2.0-0 \
     libxss1 \
     libasound2 \
+    libgtk-3-0 \
+    libxcb-shm0 \
+    libx11-xcb1 \
+    libgdk-pixbuf-2.0-0 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libcairo-gobject2 \
+    libfreetype6 \
+    libfontconfig1 \
+    libxcursor1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user with home directory for Playwright
@@ -90,8 +113,8 @@ COPY --from=base /app/.venv /app/.venv
 # Copy Playwright browsers from base stage
 COPY --from=base /root/.cache/ms-playwright /home/scraper/.cache/ms-playwright
 
-# Copy application code
-COPY . .
+# Copy application code into a package directory
+COPY . /app/scraper
 
 # Create storage directory for session state
 RUN mkdir -p /app/storage
