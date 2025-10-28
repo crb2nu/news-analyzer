@@ -17,8 +17,14 @@ from pydantic import BaseModel, Field
 import openai
 from openai import AsyncOpenAI
 
-from .database import DatabaseManager, StoredArticle
-from .config import Settings
+try:
+    # When running as a package (e.g., python -m summarizer.api)
+    from .database import DatabaseManager, StoredArticle
+    from .config import Settings
+except Exception:
+    # When running as a module from the folder (e.g., python -m api)
+    from database import DatabaseManager, StoredArticle
+    from config import Settings
 
 logger = logging.getLogger(__name__)
 

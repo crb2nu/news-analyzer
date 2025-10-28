@@ -22,4 +22,5 @@ RUN poetry config virtualenvs.create false \
 COPY . .
 
 # Run the application
-CMD ["python", "-m", "extractor"]
+# Run the processor as the default entrypoint
+CMD ["python", "-m", "processor"]

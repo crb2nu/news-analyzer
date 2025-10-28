@@ -24,8 +24,12 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import from existing modules
-from extractor.database import DatabaseManager, StoredArticle
-from scraper.config import Settings
+try:
+    from summarizer.database import DatabaseManager, StoredArticle
+    from summarizer.config import Settings
+except Exception:
+    from database import DatabaseManager, StoredArticle
+    from config import Settings
 
 # Configure logging
 logging.basicConfig(

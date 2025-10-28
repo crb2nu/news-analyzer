@@ -22,10 +22,20 @@ from minio.error import S3Error
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from extractor.pdf_extractor import PDFExtractor, Article as PDFArticle
-from extractor.html_extractor import HTMLExtractor, HTMLArticle
-from extractor.database import DatabaseManager, StoredArticle
-from scraper.config import Settings
+try:
+    from extractor.pdf_extractor import PDFExtractor, Article as PDFArticle
+    from extractor.html_extractor import HTMLExtractor, HTMLArticle
+    from extractor.database import DatabaseManager, StoredArticle
+except Exception:
+    from pdf_extractor import PDFExtractor, Article as PDFArticle
+    from html_extractor import HTMLExtractor, HTMLArticle
+    from database import DatabaseManager, StoredArticle
+
+# Canonical config source lives in this component
+try:
+    from extractor.config import Settings
+except Exception:
+    from config import Settings
 
 logger = logging.getLogger(__name__)
 

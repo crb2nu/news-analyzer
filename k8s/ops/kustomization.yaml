@@ -2,12 +2,8 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: news-analyzer
 resources:
-  - ../namespace.yaml
-  - ../secrets.yaml
-  - ../configmap.yaml
   - ops-rbac.yaml
   - ops-configmap.yaml
   - ops-health-cronjob.yaml
   - ops-cleanup-cronjob.yaml
   # ops-deployer-job.yaml is optional; apply on demand
-

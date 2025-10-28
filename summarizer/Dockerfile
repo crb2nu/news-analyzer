@@ -22,4 +22,5 @@ RUN poetry config virtualenvs.create false \
 COPY . .
 
 # Run the application
-CMD ["python", "-m", "summarizer"]
+# Run the FastAPI app by default
+CMD ["python", "-m", "api"]
