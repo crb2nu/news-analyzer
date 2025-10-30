@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+import re
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from .config import Settings
 import time
@@ -9,6 +11,17 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _debug_upload(page, helper, prefix: str = "debug/login"):
+    try:
+        ts = helper.ts()
+        html = page.content()
+        helper.put_text(f"{prefix}/{ts}.html", html)
+        img = page.screenshot(full_page=True)
+        helper.put_bytes(f"{prefix}/{ts}.png", img, content_type="image/png")
+    except Exception:
+        # best-effort only
+        pass
 
 def login(
     storage_path: Path = Path("storage_state.json"),
@@ -27,6 +40,14 @@ def login(
         bool: True if login successful, False otherwise
     """
     settings = Settings()
+    debug_enabled = str(os.getenv("SCRAPER_DEBUG", "0")).lower() in ("1", "true", "yes")
+    minio_helper = None
+    if debug_enabled:
+        try:
+            from .minio_utils import MinioHelper
+            minio_helper = MinioHelper(settings)
+        except Exception:
+            minio_helper = None
     
     for attempt in range(max_retries):
         logger.info(f"Login attempt {attempt + 1}/{max_retries}")
@@ -62,12 +83,40 @@ def login(
                     logger.info("Navigating to e-edition login page")
                     page.goto("https://swvatoday.com/eedition/smyth_county/", timeout=30000)
                     page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    if minio_helper:
+                        _debug_upload(page, minio_helper, prefix="debug/login/initial")
 
                     # Some sites show a sign-in button to reveal the form
                     try:
                         signin = page.locator("text=/sign\s*in|log\s*in/i").first
                         if signin.count() > 0:
-                            signin.click()
+                            # Accept cookie banner if present (Osano/others)
+                            for accept_sel in [
+                                "button:has-text('Accept')",
+                                "button:has-text('Accept All')",
+                                "#onetrust-accept-btn-handler",
+                                "button.osano-cm-accept-all",
+                                "button:has-text('I Agree')",
+                                "button:has-text('Continue')",
+                            ]:
+                                try:
+                                    acc = page.locator(accept_sel).first
+                                    if acc.count() > 0:
+                                        acc.click()
+                                        page.wait_for_timeout(500)
+                                        break
+                                except Exception:
+                                    pass
+
+                            # Click Sign In; handle popup if it opens
+                            try:
+                                with page.expect_popup(timeout=5000) as pop:
+                                    signin.click()
+                                newp = pop.value
+                                page = newp
+                                page.wait_for_load_state("domcontentloaded", timeout=15000)
+                            except Exception:
+                                signin.click()
                             page.wait_for_load_state("networkidle", timeout=5000)
                     except Exception:
                         pass
@@ -88,6 +137,13 @@ def login(
                             email_field = loc
                             break
                     if not email_field:
+                        try:
+                            email_field = page.get_by_label(re.compile("email", re.I))
+                            if email_field.count() == 0:
+                                email_field = page.get_by_placeholder(re.compile("email", re.I))
+                        except Exception:
+                            pass
+                    if not email_field:
                         raise PlaywrightTimeoutError("Email field not found")
 
                     # Find password field
@@ -104,30 +160,52 @@ def login(
                             password_field = loc
                             break
                     if not password_field:
-                        # Dump a snippet for debugging
                         try:
-                            html_snippet = page.content()[:2000]
-                            logger.debug(f"Login page snippet:\n{html_snippet}")
+                            password_field = page.get_by_label(re.compile("password", re.I))
+                            if password_field.count() == 0:
+                                password_field = page.get_by_placeholder(re.compile("password", re.I))
                         except Exception:
                             pass
-                        raise PlaywrightTimeoutError("Password field not found")
+                    if not password_field:
+                        # Try within iframes
+                        for frame in page.frames:
+                            try:
+                                f_email = frame.query_selector("input[type='email'], input[name*='email' i]")
+                                f_pass = frame.query_selector("input[type='password'], input[name*='pass' i]")
+                                if f_email and f_pass:
+                                    f_email.fill(settings.eedition_user)
+                                    f_pass.fill(settings.eedition_pass)
+                                    password_field = f_pass
+                                    break
+                            except Exception:
+                                continue
+                        if not password_field:
+                            if minio_helper:
+                                _debug_upload(page, minio_helper, prefix="debug/login/no_password")
+                            raise PlaywrightTimeoutError("Password field not found")
 
                     logger.info("Filling login credentials")
                     email_field.fill(settings.eedition_user)
                     password_field.fill(settings.eedition_pass)
 
                     logger.info("Submitting login form")
-                    # Click submit/login button
-                    submit_btn = page.locator("button[type='submit'], button:has-text('Sign in'), button:has-text('Log in')").first
-                    if submit_btn.count() > 0:
-                        submit_btn.click()
-                    else:
+                    # Prefer Enter on password field to avoid clicking unrelated site buttons
+                    try:
                         password_field.press('Enter')
+                    except Exception:
+                        # Fallback: submit button inside same form
+                        submit_btn = password_field.locator("xpath=ancestor::form[1]//button[@type='submit' or contains(., 'Sign in') or contains(., 'Log in')]").first
+                        if submit_btn.count() > 0:
+                            submit_btn.click()
+                        else:
+                            page.keyboard.press('Enter')
 
                     try:
                         page.wait_for_load_state("networkidle", timeout=15000)
                         if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():
                             logger.error("Login failed - still on login page")
+                            if minio_helper:
+                                _debug_upload(page, minio_helper, prefix="debug/login/post_submit")
                             browser.close()
                             continue
 
