@@ -42,6 +42,87 @@ EOF
 log() { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33mWARN\033[0m %s\n" "$*"; }
 
+warn_unready_nodes() {
+  local unready
+  unready=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 != "Ready" {print $1 " (" $2 ")"}')
+  if [[ -n "$unready" ]]; then
+    warn "Cluster has NotReady nodes: $unready"
+    warn "Workloads may be evicted until those nodes recover or are removed."
+  fi
+}
+
+cleanup_jobs() {
+  if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
+    log "Namespace $NAMESPACE not present yet; skipping job cleanup"
+    return
+  fi
+  log "Pruning completed/failed Jobs to stay under quota"
+  local to_delete=()
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && to_delete+=("$name")
+  done < <(kubens get jobs -o jsonpath='{range .items[?(@.status.succeeded==1 || @.status.failed>=1)]}{.metadata.name}{"\n"}{end}' || true)
+
+  if [[ ${#to_delete[@]} -eq 0 ]]; then
+    log "No completed Jobs to delete"
+    return
+  fi
+
+  for job in "${to_delete[@]}"; do
+    log "Deleting old job $job"
+    kubens delete job "$job" --ignore-not-found >/dev/null 2>&1 || true
+  done
+}
+
+cleanup_pods() {
+  if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
+    log "Namespace $NAMESPACE not present yet; skipping pod cleanup"
+    return
+  fi
+  log "Removing leftover pods in Succeeded/Failed phases"
+  local pods=()
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && pods+=("$name")
+  done < <(kubens get pods -o jsonpath='{range .items[?(@.status.phase=="Succeeded" || @.status.phase=="Failed")]}{.metadata.name}{"\n"}{end}' || true)
+
+  # Also sweep ad-hoc debug pods launched via kubectl run (label run=*) even if still running
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && pods+=("$name")
+  done < <(kubens get pods -l run -o jsonpath='{range .items}{.metadata.name}{"\n"}{end}' || true)
+
+  if [[ ${#pods[@]} -eq 0 ]]; then
+    log "No stray pods to delete"
+    return
+  fi
+
+  for pod in "${pods[@]}"; do
+    log "Deleting pod $pod"
+    kubens delete pod "$pod" --ignore-not-found >/dev/null 2>&1 || true
+  done
+}
+
+ensure_postgres_ready() {
+  log "Waiting for Postgres statefulset (up to 10m)"
+  if kubens rollout status statefulset/postgres --timeout=10m; then
+    return 0
+  fi
+
+  warn "Postgres rollout timed out; attempting to recycle pods"
+  warn_unready_nodes
+
+  local pods=()
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && pods+=("$name")
+  done < <(kubens get pods -l app=news-analyzer,component=postgres -o jsonpath='{range .items}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+  for pod in "${pods[@]}"; do
+    warn "Force deleting stuck Postgres pod $pod"
+    kubens delete pod "$pod" --force --grace-period=0 >/dev/null 2>&1 || true
+  done
+
+  log "Retrying Postgres rollout"
+  kubens rollout status statefulset/postgres --timeout=10m
+}
+
 # Parse flags
 HARBOR_USER=""; HARBOR_PASS=""; HARBOR_SERVER="registry.harbor.lan"; HARBOR_EMAIL="devnull@example.com"
 while [[ $# -gt 0 ]]; do
@@ -126,7 +207,7 @@ apply_base() {
   kubens apply -f k8s/ntfy-deployment.yaml
 
   log "Waiting for infra to become ready"
-  kubens rollout status statefulset/postgres --timeout=10m
+  ensure_postgres_ready
   kubens rollout status statefulset/minio --timeout=10m
   kubens rollout status deployment/ntfy --timeout=10m
 }
@@ -215,11 +296,18 @@ trigger_pipeline() {
 }
 
 main() {
+  warn_unready_nodes
+  cleanup_jobs
+  cleanup_pods
+
   ensure_namespace
   ensure_harbor_pull_secret
   apply_base
   apply_app
   apply_ops_and_build
+
+  cleanup_jobs
+  cleanup_pods
 
   case "$BUILD" in
     all) build_components "scraper,extractor,notifier,summarizer";;
@@ -228,6 +316,8 @@ main() {
   esac
 
   if [[ "$TRIGGER_PIPELINE" == "true" ]]; then
+    cleanup_jobs
+    cleanup_pods
     trigger_pipeline
   else
     log "Skipping initial pipeline trigger"
