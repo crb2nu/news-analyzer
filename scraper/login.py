@@ -12,6 +12,55 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _dismiss_cookie_banner(page, helper, label: str) -> bool:
+    selectors = [
+        "button.osano-cm-accept",
+        "button.osano-cm-accept-all",
+        "button.osano-cm-accept-all2",
+        "button:has-text('Accept')",
+        "button:has-text('Accept All')",
+        "button:has-text('I Agree')",
+        "button:has-text('Continue')",
+    ]
+    start = time.time()
+    dismissed = False
+    while time.time() - start < 6:
+        clicked = False
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible():
+                    loc.click(timeout=2000)
+                    page.wait_for_timeout(500)
+                    dismissed = True
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            for frame in page.frames:
+                for sel in selectors:
+                    try:
+                        loc = frame.locator(sel).first
+                        if loc.count() > 0 and loc.is_visible():
+                            loc.click(timeout=2000)
+                            page.wait_for_timeout(500)
+                            dismissed = True
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
+        if not clicked:
+            break
+        if dismissed:
+            break
+    if not dismissed and helper:
+        _debug_upload(page, helper, prefix=f"debug/login/cookie_block_{label}")
+    return dismissed
+
+
 def _debug_upload(page, helper, prefix: str = "debug/login"):
     try:
         ts = helper.ts()
@@ -85,28 +134,13 @@ def login(
                     page.wait_for_load_state("domcontentloaded", timeout=15000)
                     if minio_helper:
                         _debug_upload(page, minio_helper, prefix="debug/login/initial")
+                    _dismiss_cookie_banner(page, minio_helper, label="initial")
 
                     # Some sites show a sign-in button to reveal the form
                     try:
                         signin = page.locator("text=/sign\s*in|log\s*in/i").first
                         if signin.count() > 0:
-                            # Accept cookie banner if present (Osano/others)
-                            for accept_sel in [
-                                "button:has-text('Accept')",
-                                "button:has-text('Accept All')",
-                                "#onetrust-accept-btn-handler",
-                                "button.osano-cm-accept-all",
-                                "button:has-text('I Agree')",
-                                "button:has-text('Continue')",
-                            ]:
-                                try:
-                                    acc = page.locator(accept_sel).first
-                                    if acc.count() > 0:
-                                        acc.click()
-                                        page.wait_for_timeout(500)
-                                        break
-                                except Exception:
-                                    pass
+                            _dismiss_cookie_banner(page, minio_helper, label="pre_signin_button")
 
                             # Click Sign In; handle popup if it opens
                             try:
@@ -118,6 +152,7 @@ def login(
                             except Exception:
                                 signin.click()
                             page.wait_for_load_state("networkidle", timeout=5000)
+                            _dismiss_cookie_banner(page, minio_helper, label="post_signin_button")
                     except Exception:
                         pass
 
@@ -201,6 +236,7 @@ def login(
                             page.keyboard.press('Enter')
 
                     try:
+                        _dismiss_cookie_banner(page, minio_helper, label="post_credentials")
                         page.wait_for_load_state("networkidle", timeout=15000)
                         if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():
                             logger.error("Login failed - still on login page")
