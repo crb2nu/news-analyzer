@@ -60,7 +60,23 @@ cleanup_jobs() {
   local to_delete=()
   while IFS= read -r name; do
     [[ -n "$name" ]] && to_delete+=("$name")
-  done < <(kubens get jobs -o jsonpath='{range .items[?(@.status.succeeded==1 || @.status.failed>=1)]}{.metadata.name}{"\n"}{end}' || true)
+  done < <(kubens get jobs -o jsonpath='{range .items[?(@.status.succeeded==1)]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && to_delete+=("$name")
+  done < <(kubens get jobs -o jsonpath='{range .items[?(@.status.failed>=1)]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+  # Deduplicate job names (a job may match succeeded and failed filters edge-case)
+  if [[ ${#to_delete[@]} -gt 0 ]]; then
+    local uniq_jobs=()
+    declare -A seen_jobs=()
+    for job in "${to_delete[@]}"; do
+      if [[ -n "$job" && -z "${seen_jobs[$job]:-}" ]]; then
+        uniq_jobs+=("$job")
+        seen_jobs[$job]=1
+      fi
+    done
+    to_delete=("${uniq_jobs[@]}")
+  fi
 
   if [[ ${#to_delete[@]} -eq 0 ]]; then
     log "No completed Jobs to delete"
@@ -82,12 +98,27 @@ cleanup_pods() {
   local pods=()
   while IFS= read -r name; do
     [[ -n "$name" ]] && pods+=("$name")
-  done < <(kubens get pods -o jsonpath='{range .items[?(@.status.phase=="Succeeded" || @.status.phase=="Failed")]}{.metadata.name}{"\n"}{end}' || true)
+  done < <(kubens get pods -o jsonpath='{range .items[?(@.status.phase=="Succeeded")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && pods+=("$name")
+  done < <(kubens get pods -o jsonpath='{range .items[?(@.status.phase=="Failed")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 
   # Also sweep ad-hoc debug pods launched via kubectl run (label run=*) even if still running
   while IFS= read -r name; do
     [[ -n "$name" ]] && pods+=("$name")
   done < <(kubens get pods -l run -o jsonpath='{range .items}{.metadata.name}{"\n"}{end}' || true)
+
+  if [[ ${#pods[@]} -gt 0 ]]; then
+    local uniq_pods=()
+    declare -A seen_pods=()
+    for pod in "${pods[@]}"; do
+      if [[ -n "$pod" && -z "${seen_pods[$pod]:-}" ]]; then
+        uniq_pods+=("$pod")
+        seen_pods[$pod]=1
+      fi
+    done
+    pods=("${uniq_pods[@]}")
+  fi
 
   if [[ ${#pods[@]} -eq 0 ]]; then
     log "No stray pods to delete"
