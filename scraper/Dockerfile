@@ -68,7 +68,9 @@ FROM python:3.11-slim as production
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    HOME=/home/scraper \
+    PLAYWRIGHT_BROWSERS_PATH=/home/scraper/.cache/ms-playwright
 
 # Install runtime dependencies for Playwright
 RUN apt-get update && apt-get install -y \
@@ -101,9 +103,12 @@ RUN apt-get update && apt-get install -y \
     libxcursor1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user with home directory for Playwright
-RUN groupadd -r scraper && \
-    useradd -r -g scraper -d /home/scraper -m scraper
+# Create non-root user with deterministic UID/GID matching the Kubernetes securityContext
+ARG APP_UID=1000
+ARG APP_GID=1000
+RUN groupadd --gid "$APP_GID" scraper && \
+    useradd --uid "$APP_UID" --gid "$APP_GID" --home /home/scraper --create-home scraper && \
+    mkdir -p /home/scraper/.cache/ms-playwright
 
 WORKDIR /app
 

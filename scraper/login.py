@@ -1,6 +1,8 @@
 from pathlib import Path
 import os
-import re
+import json
+from datetime import datetime, timedelta
+from urllib.parse import quote_plus
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from .config import Settings
 import time
@@ -10,6 +12,108 @@ from typing import Optional
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+E_EDITION_URL = "https://swvatoday.com/eedition/smyth_county/"
+LOGIN_URL = f"https://swvatoday.com/users/login/?referer_url={quote_plus(E_EDITION_URL)}"
+LOCKOUT_LOCAL_FILENAME = ".login_lockout.json"
+
+
+class LockoutGuard:
+    def __init__(
+        self,
+        helper,
+        storage_path: Path,
+        cooldown_minutes: int,
+        lock_key: str,
+    ) -> None:
+        self.helper = helper
+        self.storage_path = storage_path
+        self.cooldown_minutes = max(int(cooldown_minutes or 0), 0)
+        self.lock_key = lock_key
+        local_dir = storage_path.parent if storage_path else Path(".")
+        self.local_path = local_dir / LOCKOUT_LOCAL_FILENAME
+
+    def is_active(self) -> bool:
+        if self.cooldown_minutes <= 0:
+            return False
+        info = self._load_marker()
+        if not info:
+            return False
+        until_ts = info.get("active_until_ts")
+        reason = info.get("reason", "unknown")
+        if until_ts is None:
+            self.clear()
+            return False
+        now_ts = datetime.utcnow().timestamp()
+        if now_ts < float(until_ts):
+            until_str = info.get("active_until", "unknown time")
+            logger.warning(
+                "Skipping login: lockout active until %s UTC (reason: %s)",
+                until_str,
+                reason,
+            )
+            return True
+        self.clear()
+        return False
+
+    def activate(self, reason: str) -> None:
+        if self.cooldown_minutes <= 0:
+            return
+        now = datetime.utcnow()
+        until = now + timedelta(minutes=self.cooldown_minutes)
+        payload = {
+            "timestamp": now.isoformat(timespec="seconds") + "Z",
+            "reason": reason,
+            "active_until": until.isoformat(timespec="seconds") + "Z",
+            "active_until_ts": until.timestamp(),
+        }
+        data = json.dumps(payload)
+        if self.helper:
+            try:
+                self.helper.put_text(self.lock_key, data, encoding="utf-8")
+            except Exception:
+                logger.debug("Failed to persist lockout marker to MinIO", exc_info=True)
+        try:
+            self.local_path.write_text(data, encoding="utf-8")
+        except Exception:
+            logger.debug("Failed to persist lockout marker locally", exc_info=True)
+        logger.warning(
+            "Login attempts suspended for %d minutes (reason: %s)",
+            self.cooldown_minutes,
+            reason,
+        )
+
+    def clear(self) -> None:
+        if self.helper:
+            try:
+                self.helper.delete_object(self.lock_key)
+            except Exception:
+                logger.debug("Failed to delete remote lockout marker", exc_info=True)
+        try:
+            if self.local_path.exists():
+                self.local_path.unlink()
+        except Exception:
+            logger.debug("Failed to delete local lockout marker", exc_info=True)
+
+    def _load_marker(self) -> Optional[dict]:
+        text = None
+        if self.helper:
+            try:
+                text = self.helper.get_text(self.lock_key)
+            except Exception:
+                logger.debug("Unable to read remote lockout marker", exc_info=True)
+        if not text and self.local_path.exists():
+            try:
+                text = self.local_path.read_text(encoding="utf-8")
+            except Exception:
+                logger.debug("Unable to read local lockout marker", exc_info=True)
+                text = None
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
 
 
 def _dismiss_cookie_banner(page, helper, label: str) -> bool:
@@ -91,19 +195,30 @@ def login(
     settings = Settings()
     debug_enabled = str(os.getenv("SCRAPER_DEBUG", "0")).lower() in ("1", "true", "yes")
     minio_helper = None
-    if debug_enabled:
+    if debug_enabled or settings.lockout_cooldown_minutes > 0:
         try:
             from .minio_utils import MinioHelper
             minio_helper = MinioHelper(settings)
         except Exception:
             minio_helper = None
-    
+
+    debug_helper = minio_helper if debug_enabled else None
+    lockout_guard = LockoutGuard(
+        helper=minio_helper,
+        storage_path=storage_path,
+        cooldown_minutes=settings.lockout_cooldown_minutes,
+        lock_key=settings.lockout_marker_key,
+    )
+
+    if lockout_guard.is_active():
+        return False
+
     for attempt in range(max_retries):
         logger.info(f"Login attempt {attempt + 1}/{max_retries}")
 
         modes = [True, False] if use_proxy else [False]
         for mode in modes:
-            proxy_config = Settings().get_playwright_proxy() if mode else None
+            proxy_config = settings.get_playwright_proxy() if mode else None
             if proxy_config:
                 logger.info(f"Using proxy: {proxy_config['server']}")
             else:
@@ -129,134 +244,104 @@ def login(
                     context = browser.new_context()
                     page = context.new_page()
 
-                    logger.info("Navigating to e-edition login page")
-                    page.goto("https://swvatoday.com/eedition/smyth_county/", timeout=30000)
-                    page.wait_for_load_state("domcontentloaded", timeout=15000)
-                    if minio_helper:
-                        _debug_upload(page, minio_helper, prefix="debug/login/initial")
-                    _dismiss_cookie_banner(page, minio_helper, label="initial")
-
-                    # Some sites show a sign-in button to reveal the form
+                    logger.info("Navigating to account login page")
                     try:
-                        signin = page.locator("text=/sign\s*in|log\s*in/i").first
-                        if signin.count() > 0:
-                            _dismiss_cookie_banner(page, minio_helper, label="pre_signin_button")
+                        response = page.goto(LOGIN_URL, timeout=45000, wait_until="domcontentloaded")
+                        if response and response.status == 429:
+                            logger.error("Login page responded with HTTP 429 (Too Many Requests)")
+                            lockout_guard.activate("http 429 from login page")
+                            browser.close()
+                            return False
+                        page.wait_for_load_state("domcontentloaded", timeout=20000)
+                    except PlaywrightTimeoutError as exc:
+                        logger.error("Failed to load login page: %s", exc)
+                        if debug_helper:
+                            _debug_upload(page, debug_helper, prefix="debug/login/login_page_timeout")
+                        browser.close()
+                        continue
 
-                            # Click Sign In; handle popup if it opens
-                            try:
-                                with page.expect_popup(timeout=5000) as pop:
-                                    signin.click()
-                                newp = pop.value
-                                page = newp
-                                page.wait_for_load_state("domcontentloaded", timeout=15000)
-                            except Exception:
-                                signin.click()
-                            page.wait_for_load_state("networkidle", timeout=5000)
-                            _dismiss_cookie_banner(page, minio_helper, label="post_signin_button")
-                    except Exception:
-                        pass
+                    if debug_helper:
+                        _debug_upload(page, debug_helper, prefix="debug/login/initial")
+                    _dismiss_cookie_banner(page, debug_helper, label="initial")
 
-                    # Find email/user field
-                    email_selectors = [
-                        "input[name='email']",
-                        "input[type='email']",
-                        "input[id*='email' i]",
-                        "input[name*='email' i]",
-                        "input[id*='user' i]",
-                        "input[name*='user' i]",
-                    ]
-                    email_field = None
-                    for sel in email_selectors:
-                        loc = page.locator(sel).first
-                        if loc.count() > 0:
-                            email_field = loc
-                            break
-                    if not email_field:
-                        try:
-                            email_field = page.get_by_label(re.compile("email", re.I))
-                            if email_field.count() == 0:
-                                email_field = page.get_by_placeholder(re.compile("email", re.I))
-                        except Exception:
-                            pass
-                    if not email_field:
-                        raise PlaywrightTimeoutError("Email field not found")
+                    email_field = page.locator("#user-username").first
+                    if email_field.count() == 0:
+                        email_field = page.locator("form.user-login-form input[name='username']").first
+                    if email_field.count() == 0:
+                        if debug_helper:
+                            _debug_upload(page, debug_helper, prefix="debug/login/no_username")
+                        raise PlaywrightTimeoutError("Username field not found")
 
-                    # Find password field
-                    password_selectors = [
-                        "input[name='password']",
-                        "input[type='password']",
-                        "input[id*='pass' i]",
-                        "input[name*='pass' i]",
-                    ]
-                    password_field = None
-                    for sel in password_selectors:
-                        loc = page.locator(sel).first
-                        if loc.count() > 0:
-                            password_field = loc
-                            break
-                    if not password_field:
-                        try:
-                            password_field = page.get_by_label(re.compile("password", re.I))
-                            if password_field.count() == 0:
-                                password_field = page.get_by_placeholder(re.compile("password", re.I))
-                        except Exception:
-                            pass
-                    if not password_field:
-                        # Try within iframes
-                        for frame in page.frames:
-                            try:
-                                f_email = frame.query_selector("input[type='email'], input[name*='email' i]")
-                                f_pass = frame.query_selector("input[type='password'], input[name*='pass' i]")
-                                if f_email and f_pass:
-                                    f_email.fill(settings.eedition_user)
-                                    f_pass.fill(settings.eedition_pass)
-                                    password_field = f_pass
-                                    break
-                            except Exception:
-                                continue
-                        if not password_field:
-                            if minio_helper:
-                                _debug_upload(page, minio_helper, prefix="debug/login/no_password")
-                            raise PlaywrightTimeoutError("Password field not found")
+                    password_field = page.locator("#user-password").first
+                    if password_field.count() == 0:
+                        password_field = page.locator("form.user-login-form input[name='password']").first
+                    if password_field.count() == 0:
+                        if debug_helper:
+                            _debug_upload(page, debug_helper, prefix="debug/login/no_password")
+                        raise PlaywrightTimeoutError("Password field not found")
 
                     logger.info("Filling login credentials")
                     email_field.fill(settings.eedition_user)
                     password_field.fill(settings.eedition_pass)
 
                     logger.info("Submitting login form")
-                    # Prefer Enter on password field to avoid clicking unrelated site buttons
-                    try:
+                    submit_btn = page.locator("form.user-login-form button.btn-primary").first
+                    if submit_btn.count() > 0:
+                        submit_btn.click()
+                    else:
                         password_field.press('Enter')
-                    except Exception:
-                        # Fallback: submit button inside same form
-                        submit_btn = password_field.locator("xpath=ancestor::form[1]//button[@type='submit' or contains(., 'Sign in') or contains(., 'Log in')]").first
-                        if submit_btn.count() > 0:
-                            submit_btn.click()
-                        else:
-                            page.keyboard.press('Enter')
 
                     try:
-                        _dismiss_cookie_banner(page, minio_helper, label="post_credentials")
-                        page.wait_for_load_state("networkidle", timeout=15000)
-                        if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():
-                            logger.error("Login failed - still on login page")
-                            if minio_helper:
-                                _debug_upload(page, minio_helper, prefix="debug/login/post_submit")
+                        _dismiss_cookie_banner(page, debug_helper, label="post_credentials")
+                        page.wait_for_load_state("networkidle", timeout=20000)
+                    except PlaywrightTimeoutError:
+                        logger.warning("Timeout waiting for post-login network idle; continuing")
+
+                    error_banner = page.locator(".alert-danger").first
+                    if error_banner.count() > 0 and error_banner.is_visible():
+                        try:
+                            error_text = error_banner.inner_text().strip()
+                        except Exception:
+                            error_text = "Unknown error"
+                        logger.error("Login error banner: %s", error_text)
+                        if debug_helper:
+                            _debug_upload(page, debug_helper, prefix="debug/login/error_banner")
+                        if "too many login attempts" in error_text.lower():
+                            lockout_guard.activate("site lockout message")
+                            browser.close()
+                            return False
+                        browser.close()
+                        continue
+
+                    if "users/login" in page.url.lower():
+                        logger.error("Login failed - still on login page")
+                        if debug_helper:
+                            _debug_upload(page, debug_helper, prefix="debug/login/post_submit")
+                        browser.close()
+                        continue
+
+                    if not page.url.startswith(E_EDITION_URL):
+                        try:
+                            page.goto(E_EDITION_URL, timeout=45000)
+                            page.wait_for_load_state("domcontentloaded", timeout=20000)
+                        except PlaywrightTimeoutError:
+                            logger.error("Unable to load e-edition after login")
+                            if debug_helper:
+                                _debug_upload(page, debug_helper, prefix="debug/login/eedition_failed")
                             browser.close()
                             continue
 
-                        logger.info(f"Saving session state to {storage_path}")
-                        context.storage_state(path=str(storage_path))
-                        if storage_path.exists() and storage_path.stat().st_size > 0:
-                            logger.info("Login successful and session state saved")
-                            browser.close()
-                            return True
-                        else:
-                            logger.error("Storage state file not created or empty")
-                            browser.close()
-                            continue
-                    except PlaywrightTimeoutError:
-                        logger.error("Timeout waiting for login to complete")
+                    _dismiss_cookie_banner(page, debug_helper, label="post_login_edition")
+
+                    logger.info(f"Saving session state to {storage_path}")
+                    context.storage_state(path=str(storage_path))
+                    if storage_path.exists() and storage_path.stat().st_size > 0:
+                        logger.info("Login successful and session state saved")
+                        lockout_guard.clear()
+                        browser.close()
+                        return True
+                    else:
+                        logger.error("Storage state file not created or empty")
                         browser.close()
                         continue
 

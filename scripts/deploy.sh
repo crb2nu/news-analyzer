@@ -245,6 +245,9 @@ apply_base() {
 
 apply_app() {
   log "Applying application workloads"
+  if [[ -f k8s/scraper-login-override.yaml ]]; then
+    kubens apply -f k8s/scraper-login-override.yaml
+  fi
   kubens apply -f k8s/scraper-cronjob.yaml
   kubens apply -f k8s/extractor-cronjob.yaml
   kubens apply -f k8s/summarizer-deployment.yaml

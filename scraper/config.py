@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     minio_secret_key: str = "changeme-strong-secret-key"
     minio_bucket: str = "news-cache"
 
+    # Login safety configuration
+    lockout_cooldown_minutes: int = 30
+    lockout_marker_key: str = "locks/login-lockout.json"
+
     class Config:
         env_prefix = ''  # read variables directly
         env_file = '.env'

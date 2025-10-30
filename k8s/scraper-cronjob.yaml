@@ -36,6 +36,10 @@ spec:
               DATE=$(date +%Y-%m-%d)
               python -m scraper.downloader --date $DATE --storage /app/storage/storage_state.json
             env:
+            - name: HOME
+              value: /home/scraper
+            - name: PLAYWRIGHT_BROWSERS_PATH
+              value: /home/scraper/.cache/ms-playwright
             - name: EEDITION_USER
               valueFrom:
                 secretKeyRef:
@@ -96,13 +100,19 @@ spec:
             volumeMounts:
             - name: session-storage
               mountPath: /app/storage
+            - name: scraper-login-override
+              mountPath: /app/scraper/login.py
+              subPath: login.py
           volumes:
           - name: session-storage
             emptyDir: {}
+          - name: scraper-login-override
+            configMap:
+              name: scraper-login-override
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
-            fsGroup: 1000
+            runAsUser: 995
+            fsGroup: 995
 ---
 ## PVC removed to stay within namespace quota; using emptyDir for session storage.
 ---
@@ -144,6 +154,10 @@ spec:
             - --storage
             - /app/storage/storage_state.json
             env:
+            - name: HOME
+              value: /home/scraper
+            - name: PLAYWRIGHT_BROWSERS_PATH
+              value: /home/scraper/.cache/ms-playwright
             - name: EEDITION_USER
               valueFrom:
                 secretKeyRef:
@@ -171,18 +185,24 @@ spec:
                   key: SMARTPROXY_HOST
             resources:
               requests:
-                memory: "256Mi"
-                cpu: "100m"
-              limits:
                 memory: "512Mi"
                 cpu: "250m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
             volumeMounts:
             - name: session-storage
               mountPath: /app/storage
+            - name: scraper-login-override
+              mountPath: /app/scraper/login.py
+              subPath: login.py
           volumes:
           - name: session-storage
             emptyDir: {}
+          - name: scraper-login-override
+            configMap:
+              name: scraper-login-override
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
-            fsGroup: 1000
+            runAsUser: 995
+            fsGroup: 995

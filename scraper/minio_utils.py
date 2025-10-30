@@ -4,6 +4,8 @@ import os
 from datetime import datetime
 from typing import Optional
 
+from minio.error import S3Error
+
 from minio import Minio
 
 from .config import Settings
@@ -68,7 +70,37 @@ class MinioHelper:
     def put_text(self, key: str, text: str, encoding: str = "utf-8") -> bool:
         return self.put_bytes(key, text.encode(encoding), content_type="text/html; charset=utf-8")
 
+    def get_text(self, key: str, encoding: str = "utf-8") -> Optional[str]:
+        if not self.client:
+            return None
+        try:
+            response = self.client.get_object(
+                bucket_name=self.settings.minio_bucket,
+                object_name=key,
+            )
+            try:
+                data = response.read()
+            finally:
+                response.close()
+                response.release_conn()
+            return data.decode(encoding)
+        except S3Error:
+            return None
+        except Exception:
+            return None
+
+    def delete_object(self, key: str) -> bool:
+        if not self.client:
+            return False
+        try:
+            self.client.remove_object(
+                bucket_name=self.settings.minio_bucket,
+                object_name=key,
+            )
+            return True
+        except S3Error:
+            return False
+
     @staticmethod
     def ts() -> str:
         return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-
