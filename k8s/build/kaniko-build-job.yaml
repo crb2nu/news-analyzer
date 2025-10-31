@@ -26,6 +26,9 @@ spec:
           items:
           - key: .dockerconfigjson
             path: config.json
+      - name: kaniko-cache
+        persistentVolumeClaim:
+          claimName: kaniko-cache
       - name: git-ssh
         secret:
           secretName: git-ssh
@@ -70,6 +73,13 @@ spec:
       containers:
       - name: kaniko
         image: gcr.io/kaniko-project/executor:debug
+        resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
         env:
         - name: DOCKER_CONFIG
           value: /kaniko/.docker
@@ -104,10 +114,14 @@ spec:
             --destination ${DEST2} \
             --snapshotMode time \
             --use-new-run \
-            --compressed-caching=false \
+            --cache=true \
+            --cache-dir=/kaniko/cache \
+            --compressed-caching=true \
             --skip-tls-verify-registry=registry.harbor.lan
         volumeMounts:
         - name: workspace
           mountPath: /workspace
         - name: docker-config
           mountPath: /kaniko/.docker
+        - name: kaniko-cache
+          mountPath: /kaniko/cache

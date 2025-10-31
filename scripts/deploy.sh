@@ -266,6 +266,11 @@ apply_ops_and_build() {
   if [[ -d k8s/build ]]; then
     log "Applying builder overlay (Kaniko nightly cronjobs + config)"
     kubectl apply -k k8s/build || warn "Builder overlay applied with warnings (quota?). Proceeding to on-demand builds."
+    # Ensure Kaniko cache PVC exists (applied via kustomize). Pre-warm cache on first deploy?
+    if [[ -n "${KANIKO_PRIME:-}" ]]; then
+      log "Priming Kaniko cache: ${KANIKO_PRIME}"
+      build_components "${KANIKO_PRIME}"
+    fi
     # Optionally patch GIT_URL and GIT_REF
     if [[ -z "$GIT_URL" ]]; then
       # Try to detect current repo URL
@@ -308,6 +313,7 @@ build_components() {
     fi
   done
   log "Monitor builds: kubectl -n ${NAMESPACE} get jobs | grep news-analyzer-kaniko"
+  log "Kaniko cache PVC: kubectl -n ${NAMESPACE} get pvc kaniko-cache"
 }
 
 trigger_pipeline() {

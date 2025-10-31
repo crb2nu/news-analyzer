@@ -3,5 +3,6 @@ kind: Kustomization
 namespace: news-analyzer
 resources:
   - builder-configmap.yaml
+  - kaniko-cache-pvc.yaml
   - kaniko-nightly-cronjobs.yaml
   # kaniko-build-job.yaml can be applied on-demand
