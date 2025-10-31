@@ -12,6 +12,7 @@ from datetime import datetime, date
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 import json
+from urllib.parse import urljoin
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ class EditionDiscoverer:
         3. An HTML viewer with page thumbnails
         4. Navigation controls for moving between pages
         """
-        pages = []
+        pages: List[EditionPage] = []
         
         try:
             # First, navigate to the specific date if not today
@@ -126,11 +127,19 @@ class EditionDiscoverer:
                     logger.warning(f"Could not navigate to date {target_date}, using current edition")
             
             # Wait for the edition to load
+            page.wait_for_load_state("networkidle", timeout=15000)
             page.wait_for_timeout(2000)  # Give time for dynamic content
+
+            # Method 0: Parse the index list of "Page A1" style links
+            pages = self._collect_index_page_links(page, base_url)
+            if pages:
+                logger.info(f"Found {len(pages)} page links from edition index")
             
             # Method 1: Look for PageSuite PDF download links
             # PageSuite often uses a pattern like "Download PDF" or icons with PDF links
-            pdf_links = page.locator("a[href*='.pdf'], a[download*='.pdf'], a[title*='PDF'], a[aria-label*='PDF']").all()
+            pdf_links = [] if pages else page.locator(
+                "a[href*='.pdf'], a[download*='.pdf'], a[title*='PDF'], a[aria-label*='PDF']"
+            ).all()
             
             if pdf_links:
                 logger.info(f"Found {len(pdf_links)} PDF links")
@@ -300,6 +309,47 @@ class EditionDiscoverer:
         except Exception as e:
             logger.error(f"Page discovery failed: {str(e)}")
             return None
+
+    def _collect_index_page_links(self, page, base_url: str) -> List[EditionPage]:
+        """Collect page links from the landing index (e.g., "Page A1")"""
+        try:
+            anchors = page.locator("a").all()
+        except Exception:
+            return []
+
+        pages: List[EditionPage] = []
+        seen_urls: set[str] = set()
+
+        for anchor in anchors:
+            try:
+                text = (anchor.text_content() or "").strip()
+            except Exception:
+                continue
+
+            if not text or not re.search(r"\bpage\s+[a-z]?\d+\b", text, flags=re.IGNORECASE):
+                continue
+
+            href = anchor.get_attribute("data-download") or anchor.get_attribute("href")
+            href = self._normalize_url(base_url, href)
+            if not href or href in seen_urls:
+                continue
+
+            page_num = self._extract_page_number(text, href, len(pages) + 1)
+            section = self._extract_section(text, href)
+
+            format_type = "pdf" if href.lower().endswith(".pdf") else "html"
+
+            pages.append(EditionPage(
+                url=href,
+                page_number=page_num,
+                section=section,
+                title=text,
+                format=format_type,
+            ))
+            seen_urls.add(href)
+
+        pages.sort(key=lambda p: (p.page_number, p.section or ""))
+        return pages
     
     def _navigate_to_date(self, page, target_date: date) -> bool:
         """
@@ -435,6 +485,26 @@ class EditionDiscoverer:
             logger.error(f"PageSuite viewer discovery failed: {str(e)}")
         
         return pages
+
+    def _normalize_url(self, base_url: str, href: Optional[str]) -> Optional[str]:
+        """Convert relative or protocol-relative URLs to absolute ones"""
+        if not href:
+            return None
+
+        href = href.strip()
+        if not href or href.startswith("javascript:") or href in ("#", ""):
+            return None
+
+        if href.startswith("//"):
+            return f"https:{href}"
+
+        if href.startswith("http://") or href.startswith("https://"):
+            return href
+
+        if href.startswith("/"):
+            return f"https://swvatoday.com{href}"
+
+        return urljoin(base_url, href)
     
     def _extract_page_number(self, text: str, url: str, fallback: int) -> int:
         """Extract page number from text or URL"""
