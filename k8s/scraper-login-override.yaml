@@ -202,7 +202,10 @@ data:
         settings = Settings()
         debug_enabled = str(os.getenv("SCRAPER_DEBUG", "0")).lower() in ("1", "true", "yes")
         minio_helper = None
-        if debug_enabled or settings.lockout_cooldown_minutes > 0:
+        cooldown_minutes = getattr(settings, "lockout_cooldown_minutes", 0)
+        lock_key = getattr(settings, "lockout_marker_key", "locks/login-lockout.json")
+    
+        if debug_enabled or cooldown_minutes > 0:
             try:
                 from .minio_utils import MinioHelper
                 minio_helper = MinioHelper(settings)
@@ -213,8 +216,8 @@ data:
         lockout_guard = LockoutGuard(
             helper=minio_helper,
             storage_path=storage_path,
-            cooldown_minutes=settings.lockout_cooldown_minutes,
-            lock_key=settings.lockout_marker_key,
+            cooldown_minutes=cooldown_minutes,
+            lock_key=lock_key,
         )
     
         if lockout_guard.is_active():
