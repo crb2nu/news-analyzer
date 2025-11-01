@@ -6,6 +6,7 @@ body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantare
 .header h1{font-size:18px;margin:0}
 .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 label{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:14px}
+.search-group{display:flex;gap:6px;align-items:center}
 select,input[type="search"]{background:#0b1220;color:var(--text);border:1px solid #1f2937;border-radius:6px;padding:6px 8px}
 button{background:var(--accent);border:0;color:white;padding:8px 12px;border-radius:6px;cursor:pointer}
 button:hover{filter:brightness(1.05)}
@@ -13,8 +14,10 @@ button:hover{filter:brightness(1.05)}
 .card{background:radial-gradient(1200px 400px at 0% -40%,rgba(59,130,246,.25),transparent 40%),var(--card);border:1px solid #152033;border-radius:12px;padding:14px 16px}
 .card h2{margin:0 0 6px 0;font-size:18px}
 .meta{color:var(--muted);font-size:12px;margin-bottom:8px}
-.summary{white-space:pre-wrap;line-height:1.45}
+.feed-meta{margin-bottom:0}
+.summary{display:flex;flex-direction:column;gap:8px;line-height:1.5}
 .summary .kp{display:block;margin-top:8px}
+.muted{color:var(--muted)}
+.empty-state{border:1px dashed #1f2937;border-radius:12px;padding:32px;text-align:center;color:var(--muted);background:rgba(17,24,39,.45)}
 .footer{max-width:980px;margin:16px auto 40px;padding:0 16px;color:var(--muted);display:flex;gap:12px;justify-content:space-between;align-items:center}
 .footer a{color:var(--muted)}
-

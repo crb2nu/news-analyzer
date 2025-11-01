@@ -27,9 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     from summarizer.database import DatabaseManager, StoredArticle
     from summarizer.config import Settings
+    from summarizer.utils import extract_json_object
 except Exception:
     from database import DatabaseManager, StoredArticle
     from config import Settings
+    from utils import extract_json_object
 
 # Configure logging
 logging.basicConfig(
@@ -59,8 +61,12 @@ class ArticleSummarizer:
         self.settings = settings
         if not settings.openai_api_key:
             raise ValueError("OPENAI_API_KEY is not configured")
+
+        client_kwargs = {"api_key": settings.openai_api_key}
+        if settings.openai_api_base:
+            client_kwargs["base_url"] = settings.openai_api_base.rstrip("/")
         
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(**client_kwargs)
         self.model = settings.openai_model
         self.max_tokens = int(settings.openai_max_tokens)
         
@@ -138,9 +144,11 @@ Provide a JSON response with the following structure:
             )
             
             # Parse response
-            content = response.choices[0].message.content
-            result_data = json.loads(content)
-            
+            content = response.choices[0].message.content or ""
+            result_data, used_fallback = extract_json_object(content)
+            if used_fallback:
+                logger.warning("Using fallback parser for article %s", article.id)
+
             return SummaryResponse(
                 summary=result_data.get("summary", ""),
                 key_points=result_data.get("key_points", []),
@@ -149,9 +157,6 @@ Provide a JSON response with the following structure:
                 confidence_score=result_data.get("confidence_score", 0.8)
             )
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse OpenAI response for article {article.id}: {str(e)}")
-            return None
         except Exception as e:
             logger.error(f"Error summarizing article {article.id}: {str(e)}")
             return None

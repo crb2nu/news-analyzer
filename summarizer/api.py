@@ -23,10 +23,12 @@ try:
     # When running as a package (e.g., python -m summarizer.api)
     from .database import DatabaseManager, StoredArticle
     from .config import Settings
+    from .utils import extract_json_object
 except Exception:
     # When running as a module from the folder (e.g., python -m api)
     from database import DatabaseManager, StoredArticle
     from config import Settings
+    from utils import extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +75,10 @@ class SummarizationService:
     
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client_kwargs = {"api_key": settings.openai_api_key}
+        if settings.openai_api_base:
+            client_kwargs["base_url"] = settings.openai_api_base.rstrip("/")
+        self.client = AsyncOpenAI(**client_kwargs)
         self.db_manager = DatabaseManager(settings.database_url)
         
         # Prompt templates
@@ -176,22 +181,12 @@ Provide a JSON response with the following structure:
             )
             
             # Parse response
-            result_text = response.choices[0].message.content
+            result_text = response.choices[0].message.content or ""
             tokens_used = response.usage.total_tokens
-            
-            # Parse JSON response
-            import json
-            try:
-                result_data = json.loads(result_text)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse OpenAI JSON response: {e}")
-                # Fallback: create a basic summary
-                result_data = {
-                    "summary": result_text[:500] + "..." if len(result_text) > 500 else result_text,
-                    "key_points": ["Summary generated with parsing error"],
-                    "sentiment": "neutral",
-                    "confidence_score": 0.5
-                }
+
+            result_data, used_fallback = extract_json_object(result_text)
+            if used_fallback:
+                logger.warning("Using fallback parser for summarization response")
             
             # Calculate processing time
             end_time = datetime.utcnow()

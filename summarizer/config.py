@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     
     # OpenAI configuration
     openai_api_key: str = ""
+    openai_api_base: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_max_tokens: str = "1000"
     

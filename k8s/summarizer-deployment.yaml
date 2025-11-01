@@ -50,7 +50,7 @@ spec:
               name: news-analyzer-secrets
               key: OPENAI_API_KEY
         - name: OPENAI_API_BASE
-          value: "http://litellm.ai.svc.cluster.local:4000"
+          value: "http://vllm-qwen-awq-lb.ai.svc.cluster.local:8000/v1"
         - name: OPENAI_MODEL
           valueFrom:
             configMapKeyRef:
@@ -85,7 +85,20 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 5
-      volumes: []
+        volumeMounts:
+        - name: summarizer-static-override
+          mountPath: /app/static/index.html
+          subPath: index.html
+        - name: summarizer-static-override
+          mountPath: /app/static/app.js
+          subPath: app.js
+        - name: summarizer-static-override
+          mountPath: /app/static/style.css
+          subPath: style.css
+      volumes:
+      - name: summarizer-static-override
+        configMap:
+          name: summarizer-static-override
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -159,7 +172,7 @@ spec:
                   name: news-analyzer-secrets
                   key: OPENAI_API_KEY
             - name: OPENAI_API_BASE
-              value: "http://litellm.litellm.svc.cluster.local:4000"
+              value: "http://vllm-qwen-awq-lb.ai.svc.cluster.local:8000/v1"
             - name: OPENAI_MODEL
               valueFrom:
                 configMapKeyRef:
