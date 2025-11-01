@@ -1,6 +1,10 @@
 .env
 k8s/github-runner-secret.yaml
 
+# Python virtual environments
+**/*-venv/
+**/__pycache__/
+
 # Additional secret patterns (for safety)
 *.secret
 *.key
