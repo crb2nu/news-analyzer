@@ -40,6 +40,11 @@ class HTMLArticle:
     word_count: int = 0
     hash: Optional[str] = None
     raw_html: Optional[str] = None
+    location_name: Optional[str] = None
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
+    event_dates: Optional[List[Dict]] = None
+    metadata: Optional[Dict] = None
     
     def __post_init__(self):
         """Calculate derived fields after initialization."""

@@ -7,11 +7,17 @@ const sectionSelect = $('#sectionSelect');
 const searchInput = $('#search');
 const clearSearchBtn = $('#clearSearchBtn');
 const refreshBtn = $('#refreshBtn');
+const eventsPanel = $('#eventsPanel');
+const eventsList = $('#eventsList');
+const feedTab = $('#feedTab');
+const eventsTab = $('#eventsTab');
 
 const PREF_KEY = 'news-analyzer-feed-v1';
 const feedCache = new Map();
+const eventsCache = { data: null, lastFetched: null };
 let prefs = loadPrefs();
 let suppressSectionChange = false;
+let activeView = 'feed';
 
 function loadPrefs() {
   try {
@@ -43,6 +49,101 @@ function setLastUpdated(ts = null) {
   }
   const dt = new Date(ts);
   lastUpdatedEl.textContent = `Updated ${dt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+function switchView(view) {
+  if (view === activeView) return;
+  activeView = view;
+  if (view === 'feed') {
+    feedEl.hidden = false;
+    eventsPanel.hidden = true;
+    feedTab.classList.add('active');
+    feedTab.setAttribute('aria-selected', 'true');
+    eventsTab.classList.remove('active');
+    eventsTab.setAttribute('aria-selected', 'false');
+    setStatus('Showing article feed');
+  } else {
+    feedEl.hidden = true;
+    eventsPanel.hidden = false;
+    feedTab.classList.remove('active');
+    feedTab.setAttribute('aria-selected', 'false');
+    eventsTab.classList.add('active');
+    eventsTab.setAttribute('aria-selected', 'true');
+    loadEvents().catch((err) => setStatus(`Error loading events: ${err.message}`));
+  }
+}
+
+async function loadEvents(forceRefresh = false) {
+  if (!forceRefresh && eventsCache.data) {
+    renderEvents(eventsCache.data);
+    return;
+  }
+  setStatus('Loading events…');
+  const data = await fetchJSON('/events');
+  eventsCache.data = data.events || {};
+  eventsCache.lastFetched = Date.now();
+  renderEvents(eventsCache.data);
+  setStatus('Events updated');
+}
+
+function renderEvents(eventsByDate) {
+  eventsList.innerHTML = '';
+  const dates = Object.keys(eventsByDate);
+  if (!dates.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No events detected yet. Check back soon!';
+    eventsList.appendChild(empty);
+    return;
+  }
+
+  dates.sort();
+  dates.forEach((dateKey) => {
+    const group = document.createElement('section');
+    group.className = 'events-group';
+    const heading = document.createElement('h3');
+    heading.textContent = dateKey === 'unscheduled' ? 'Date to be announced' : fmtDate(dateKey);
+    group.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.className = 'events-columns';
+
+    eventsByDate[dateKey].forEach((event) => {
+      const item = document.createElement('div');
+      item.className = 'event-item';
+
+      const title = document.createElement('strong');
+      title.textContent = event.title;
+      item.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'event-meta';
+      if (event.start_time) meta.appendChild(document.createTextNode(new Date(event.start_time).toLocaleString()));
+      if (event.location_name) meta.appendChild(document.createTextNode(event.location_name));
+      item.appendChild(meta);
+
+      if (event.description) {
+        const desc = document.createElement('p');
+        desc.className = 'event-description';
+        desc.textContent = event.description;
+        item.appendChild(desc);
+      }
+
+      if (event.article_id) {
+        const link = document.createElement('a');
+        link.href = `/articles/${event.article_id}/source`;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'View source ↗';
+        item.appendChild(link);
+      }
+
+      list.appendChild(item);
+    });
+
+    group.appendChild(list);
+    eventsList.appendChild(group);
+  });
 }
 
 async function fetchJSON(url) {
@@ -122,6 +223,7 @@ function render(items, context, query) {
     meta.className = 'meta';
     const metaParts = [];
     if (item.section && item.section !== 'General') metaParts.push(item.section);
+    if (item.location_name) metaParts.push(item.location_name);
     if (item.page_number) {
       metaParts.push(`Page ${item.page_number}`);
     } else if (item.source_path) {
@@ -162,6 +264,25 @@ function render(items, context, query) {
       summary.appendChild(kp);
     }
 
+    if (item.events && item.events.length) {
+      const inline = document.createElement('div');
+      inline.className = 'event-inline';
+      const label = document.createElement('strong');
+      label.textContent = 'Events';
+      inline.appendChild(label);
+      const list = document.createElement('ul');
+      item.events.slice(0, 3).forEach((ev) => {
+        const li = document.createElement('li');
+        const parts = [];
+        if (ev.start_time) parts.push(new Date(ev.start_time).toLocaleString());
+        if (ev.location_name) parts.push(ev.location_name);
+        li.textContent = parts.length ? parts.join(' • ') : ev.title;
+        list.appendChild(li);
+      });
+      inline.appendChild(list);
+      summary.appendChild(inline);
+    }
+
     card.append(h2, meta, summary);
     feedEl.appendChild(card);
   }
@@ -172,7 +293,7 @@ function filterItems(items, { section, query }) {
     const matchesSection = !section || item.section === section;
     if (!matchesSection) return false;
     if (!query) return true;
-    const haystack = `${item.title}\n${item.summary}`.toLowerCase();
+    const haystack = `${item.title}\n${item.summary}\n${item.location_name || ''}`.toLowerCase();
     return haystack.includes(query.toLowerCase());
   });
 }
@@ -279,6 +400,9 @@ clearSearchBtn.addEventListener('click', () => {
   searchInput.focus();
 });
 
+feedTab.addEventListener('click', () => switchView('feed'));
+eventsTab.addEventListener('click', () => switchView('events'));
+
 (async () => {
   try {
     await loadDates();
@@ -286,6 +410,7 @@ clearSearchBtn.addEventListener('click', () => {
       searchInput.value = prefs.search;
     }
     await loadFeed();
+    switchView(activeView);
   } catch (e) {
     setStatus(`Error: ${e.message}`);
     setLastUpdated(null);

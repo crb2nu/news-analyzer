@@ -54,7 +54,7 @@ class ExtractionProcessor:
         
         # Initialize extractors
         self.pdf_extractor = PDFExtractor()
-        self.html_extractor = HTMLExtractor()
+        self.html_extractor = HTMLExtractor(include_raw_html=True)
         
         # Initialize database manager
         db_url = database_url or self.settings.database_url

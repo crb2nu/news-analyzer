@@ -13,7 +13,7 @@ from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ import openai
 from openai import AsyncOpenAI
 from minio import Minio
 from minio.error import S3Error
+import html
 
 try:
     # When running as a package (e.g., python -m summarizer.api)
@@ -86,8 +87,13 @@ class SummarizationService:
         self.minio_bucket = settings.minio_bucket
         self.minio_client = None
         if settings.minio_endpoint and settings.minio_access_key:
-            secure = settings.minio_endpoint.startswith("https://")
-            endpoint = settings.minio_endpoint.replace("https://", "").replace("http://", "")
+            endpoint = settings.minio_endpoint
+            secure = False
+            if endpoint.startswith("https://"):
+                secure = True
+                endpoint = endpoint[len("https://") :]
+            elif endpoint.startswith("http://"):
+                endpoint = endpoint[len("http://") :]
             self.minio_client = Minio(
                 endpoint,
                 access_key=settings.minio_access_key,
@@ -379,6 +385,101 @@ def get_service() -> SummarizationService:
     return _service
 
 
+def build_source_page(article: Dict) -> str:
+    title = html.escape(article.get('title') or 'Article')
+    section = article.get('section') or 'General'
+    location = article.get('location_name')
+    published = article.get('date_published')
+    events = article.get('events') or []
+    summary = article.get('summary_text')
+
+    raw_html = article.get('raw_html')
+    if raw_html:
+        body_html = raw_html
+    else:
+        content = html.escape(article.get('content', ''))
+        body_html = f"<pre class=\"article-content\">{content}</pre>"
+
+    events_html = ""
+    if events:
+        lines = []
+        for ev in events:
+            line = "<li><strong>{}</strong>".format(html.escape(ev.get('title', 'Event')))
+            if ev.get('start_time'):
+                line += f"<span class=\"event-time\">{html.escape(ev['start_time'])}</span>"
+            if ev.get('location_name'):
+                line += f"<span class=\"event-location\">{html.escape(ev['location_name'])}</span>"
+            if ev.get('description'):
+                line += f"<p>{html.escape(ev['description'])}</p>"
+            line += "</li>"
+            lines.append(line)
+        events_html = """
+        <section class="events">
+          <h2>Related Events</h2>
+          <ul>
+            {}
+          </ul>
+        </section>
+        """.format("\n".join(lines))
+
+    summary_html = ""
+    if summary:
+        paragraphs = [html.escape(p.strip()) for p in summary.split("\n\n") if p.strip()]
+        summary_html = "<section class=\"summary\"><h2>Summary</h2>" + "".join(
+            f"<p>{para}</p>" for para in paragraphs
+        ) + "</section>"
+
+    meta_chips = [f"<span class=\"meta-tag\">{html.escape(section)}</span>"]
+    if location:
+        meta_chips.append(f"<span class=\"meta-tag\">{html.escape(location)}</span>")
+    if published:
+        meta_chips.append(f"<span class=\"meta-tag\">Published {html.escape(published)}</span>")
+    metadata_html = "".join(meta_chips)
+
+    template = f"""<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>{title} — Original Source</title>
+  <style>
+    body {{ font-family: 'Inter', system-ui, sans-serif; margin: 0; background:#0f172a; color:#e5e7eb; }}
+    .container {{ max-width: 920px; margin: 0 auto; padding: 32px 20px 56px; }}
+    a {{ color: #38bdf8; }}
+    header {{ margin-bottom: 24px; }}
+    h1 {{ margin: 0 0 12px; font-size: 2.2rem; line-height: 1.2; }}
+    .meta {{ display:flex; flex-wrap:wrap; gap:8px; color:#94a3b8; font-size:0.9rem; margin-bottom: 20px; }}
+    .meta-tag {{ background:rgba(148,163,184,0.15); padding:4px 10px; border-radius:999px; }}
+    .summary {{ background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); padding:16px 20px; border-radius:12px; margin-bottom:24px; }}
+    .summary h2 {{ margin-top:0; }}
+    .article-body {{ background:rgba(15,23,42,0.9); border:1px solid rgba(148,163,184,0.2); border-radius:16px; padding:24px; box-shadow:0 25px 50px -12px rgba(15,23,42,0.6); }}
+    .article-content {{ white-space:pre-wrap; line-height:1.6; font-size:1rem; color:#e2e8f0; }}
+    .events {{ margin-top:32px; }}
+    .events ul {{ list-style:none; padding:0; margin:0; display:grid; gap:16px; }}
+    .events li {{ background:rgba(59,130,246,0.12); border:1px solid rgba(59,130,246,0.25); padding:16px 20px; border-radius:12px; }}
+    .events .event-time, .events .event-location {{ display:inline-block; margin-left:10px; color:#cbd5f5; font-size:0.9rem; }}
+    footer {{ margin-top:40px; font-size:0.9rem; color:#94a3b8; text-align:center; }}
+  </style>
+</head>
+<body>
+  <div class=\"container\">
+    <header>
+      <a href=\"/\" style=\"text-decoration:none;color:#38bdf8;\">← Back to feed</a>
+      <h1>{title}</h1>
+      <div class=\"meta\">{metadata_html}</div>
+    </header>
+    {summary_html}
+    <article class=\"article-body\">
+      {body_html}
+    </article>
+    {events_html}
+    <footer>Source path: {html.escape(article.get('source_url') or article.get('source_file') or 'n/a')}</footer>
+  </div>
+</body>
+</html>
+"""
+    return template
+
 # API Routes
 @app.get("/")
 async def serve_index():
@@ -399,15 +500,17 @@ async def get_article_source(
     service: SummarizationService = Depends(get_service)
 ):
     """Stream the original article source file from MinIO."""
-    if not service.minio_client:
-        raise HTTPException(status_code=503, detail="MinIO client not configured")
-
     article = await service.db_manager.get_article_by_id(article_id)
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
     source_path = article.get('source_url') or article.get('url') or article.get('source_file')
-    if not source_path:
+    raw_html = article.get('raw_html')
+    if raw_html or article.get('content'):
+        html_page = build_source_page(article)
+        return HTMLResponse(content=html_page)
+
+    if not service.minio_client or not source_path:
         raise HTTPException(status_code=404, detail="Article source not available")
 
     try:
@@ -428,10 +531,8 @@ async def get_article_source(
             obj.release_conn()
 
     is_pdf = source_path.lower().endswith(".pdf")
-    media_type = "application/pdf" if is_pdf else "text/html"
+    media_type = "application/pdf" if is_pdf else "application/octet-stream"
     headers = {"Content-Disposition": f"inline; filename={Path(source_path).name}"}
-    if not is_pdf:
-        headers["Content-Type"] = "text/html; charset=utf-8"
     return StreamingResponse(iterfile(), media_type=media_type, headers=headers)
 
 @app.get("/health")
@@ -535,6 +636,20 @@ async def get_feed(
         search=q,
     )
     return {"date": target_date.isoformat(), "count": len(items), "items": items}
+
+
+@app.get("/events")
+async def get_events(
+    days: int = 30,
+    service: SummarizationService = Depends(get_service)
+):
+    """Return upcoming community events derived from articles."""
+    events = await service.db_manager.get_events(days)
+    grouped: Dict[str, List[Dict]] = {}
+    for event in events:
+        key = event['start_time'][:10] if event.get('start_time') else 'unscheduled'
+        grouped.setdefault(key, []).append(event)
+    return {"days": days, "events": grouped}
 
 
 if __name__ == "__main__":

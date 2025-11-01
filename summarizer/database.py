@@ -10,11 +10,11 @@ This module handles PostgreSQL database operations for the summarizer including:
 import logging
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import json
 
 import asyncpg
-from asyncpg import Pool, Connection
+from asyncpg import Pool, Connection, exceptions
 from contextlib import asynccontextmanager
 
 try:
@@ -47,6 +47,12 @@ class StoredArticle:
     date_created: datetime = None
     date_updated: datetime = None
     processing_status: str = 'extracted'  # 'extracted', 'summarized', 'notified'
+    raw_html: Optional[str] = None
+    metadata: Optional[Dict] = None
+    location_name: Optional[str] = None
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
+    event_dates: Optional[List[Dict]] = None
     
     def __post_init__(self):
         if not self.date_created:
@@ -145,7 +151,13 @@ class DatabaseManager:
                     date_extracted=row['date_extracted'],
                     date_created=row['date_created'],
                     date_updated=row['date_updated'],
-                    processing_status=row['processing_status']
+                    processing_status=row['processing_status'],
+                    raw_html=row.get('raw_html'),
+                    metadata=json.loads(row.get('metadata')) if row.get('metadata') else None,
+                    location_name=row.get('location_name'),
+                    location_lat=row.get('location_lat'),
+                    location_lon=row.get('location_lon'),
+                    event_dates=json.loads(row.get('event_dates')) if row.get('event_dates') else None
                 )
                 articles.append(article)
             
@@ -346,26 +358,96 @@ class DatabaseManager:
                     'word_count': row['word_count'],
                     'source_path': source_path,
                     'page_number': row['page_number'],
+                    'location_name': row['location_name'],
+                    'events': json.loads(row['event_dates']) if row['event_dates'] else [],
                 })
             return results
 
     async def get_article_by_id(self, article_id: int) -> Optional[Dict]:
-        sql = """
-        SELECT
-            a.id,
-            a.title,
-            a.content,
-            a.url,
-            a.source_url,
-            a.source_file,
-            a.section,
-            a.page_number,
-            a.date_published,
-            a.word_count
+        sql_article = """
+        SELECT a.*, COALESCE(s.summary_text, '') AS summary_text
         FROM articles a
+        LEFT JOIN summaries s ON s.article_id = a.id AND s.summary_type = 'brief'
         WHERE a.id = $1
         """
 
+        sql_events = """
+        SELECT id, title, description, start_time, end_time, location_name, location_meta
+        FROM article_events
+        WHERE article_id = $1
+        ORDER BY start_time NULLS LAST, id ASC
+        """
+
         async with self.get_connection() as conn:
-            row = await conn.fetchrow(sql, article_id)
-            return dict(row) if row else None
+            article_row = await conn.fetchrow(sql_article, article_id)
+            if not article_row:
+                return None
+            events = await conn.fetch(sql_events, article_id)
+
+            metadata = json.loads(article_row.get('metadata')) if article_row.get('metadata') else None
+            event_dates = json.loads(article_row.get('event_dates')) if article_row.get('event_dates') else None
+
+            return {
+                'id': article_row['id'],
+                'title': article_row['title'],
+                'content': article_row['content'],
+                'summary_text': article_row['summary_text'],
+                'url': article_row['url'],
+                'source_url': article_row['source_url'],
+                'source_file': article_row.get('source_file'),
+                'section': article_row.get('section'),
+                'page_number': article_row.get('page_number'),
+                'date_published': article_row['date_published'].isoformat() if article_row.get('date_published') else None,
+                'word_count': article_row.get('word_count'),
+                'raw_html': article_row.get('raw_html'),
+                'metadata': metadata,
+                'location_name': article_row.get('location_name'),
+                'location_lat': article_row.get('location_lat'),
+                'location_lon': article_row.get('location_lon'),
+                'event_dates': event_dates,
+                'events': [
+                    {
+                        'id': ev['id'],
+                        'title': ev['title'],
+                        'description': ev['description'],
+                        'start_time': ev['start_time'].isoformat() if ev['start_time'] else None,
+                        'end_time': ev['end_time'].isoformat() if ev['end_time'] else None,
+                        'location_name': ev['location_name'],
+                        'location_meta': json.loads(ev['location_meta']) if ev['location_meta'] else None,
+                    }
+                    for ev in events
+                ],
+            }
+
+    async def get_events(self, days: int = 30) -> List[Dict]:
+        sql = """
+        SELECT e.id, e.title, e.description, e.start_time, e.end_time,
+               e.location_name, e.location_meta, e.article_id, a.title AS article_title
+        FROM article_events e
+        JOIN articles a ON a.id = e.article_id
+        WHERE e.start_time >= $1 OR e.start_time IS NULL
+        ORDER BY e.start_time NULLS LAST, e.id ASC
+        """
+
+        cutoff = datetime.utcnow() - timedelta(days=days)
+
+        async with self.get_connection() as conn:
+            try:
+                rows = await conn.fetch(sql, cutoff)
+            except exceptions.UndefinedTableError:
+                return []
+
+            events: List[Dict] = []
+            for row in rows:
+                events.append({
+                    'id': row['id'],
+                    'title': row['title'],
+                    'description': row['description'],
+                    'start_time': row['start_time'].isoformat() if row['start_time'] else None,
+                    'end_time': row['end_time'].isoformat() if row['end_time'] else None,
+                    'location_name': row['location_name'],
+                    'location_meta': json.loads(row['location_meta']) if row['location_meta'] else None,
+                    'article_id': row['article_id'],
+                    'article_title': row['article_title'],
+                })
+            return events

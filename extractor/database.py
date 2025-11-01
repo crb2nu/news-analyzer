@@ -24,9 +24,11 @@ from contextlib import asynccontextmanager
 try:
     from .pdf_extractor import Article as PDFArticle
     from .html_extractor import HTMLArticle
+    from .event_parser import extract_events
 except Exception:
     from pdf_extractor import Article as PDFArticle
     from html_extractor import HTMLArticle
+    from event_parser import extract_events
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,12 @@ class StoredArticle:
     date_created: datetime = None
     date_updated: datetime = None
     processing_status: str = 'extracted'  # 'extracted', 'summarized', 'notified'
+    raw_html: Optional[str] = None
+    metadata: Optional[Dict] = None
+    location_name: Optional[str] = None
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
+    event_dates: Optional[List[Dict]] = None
     
     def __post_init__(self):
         if not self.date_created:
@@ -131,7 +139,13 @@ class DatabaseManager:
             date_extracted TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
             date_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
             date_updated TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-            processing_status VARCHAR(20) NOT NULL DEFAULT 'extracted'
+            processing_status VARCHAR(20) NOT NULL DEFAULT 'extracted',
+            raw_html TEXT,
+            metadata JSONB,
+            location_name TEXT,
+            location_lat DOUBLE PRECISION,
+            location_lon DOUBLE PRECISION,
+            event_dates JSONB
         );
         
         -- Summaries table
@@ -177,7 +191,7 @@ class DatabaseManager:
         
         -- Full-text search index
         CREATE INDEX IF NOT EXISTS idx_articles_fts ON articles USING gin(to_tsvector('english', title || ' ' || content));
-        
+
         -- Update trigger for date_updated
         CREATE OR REPLACE FUNCTION update_date_updated()
         RETURNS TRIGGER AS $$
@@ -186,16 +200,42 @@ class DatabaseManager:
             RETURN NEW;
         END;
         $$ LANGUAGE plpgsql;
-        
+
         DROP TRIGGER IF EXISTS trigger_articles_update_date ON articles;
         CREATE TRIGGER trigger_articles_update_date
             BEFORE UPDATE ON articles
             FOR EACH ROW
             EXECUTE FUNCTION update_date_updated();
+
+        CREATE TABLE IF NOT EXISTS article_events (
+            id SERIAL PRIMARY KEY,
+            article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            description TEXT,
+            start_time TIMESTAMP WITH TIME ZONE,
+            end_time TIMESTAMP WITH TIME ZONE,
+            location_name TEXT,
+            location_meta JSONB,
+            date_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            date_updated TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_article_events_article_id ON article_events(article_id);
+        CREATE INDEX IF NOT EXISTS idx_article_events_start_time ON article_events(start_time);
         """
-        
+
+        alter_sql = """
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS raw_html TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS metadata JSONB;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS location_name TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS location_lat DOUBLE PRECISION;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS location_lon DOUBLE PRECISION;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS event_dates JSONB;
+        """
+
         async with self.get_connection() as conn:
             await conn.execute(schema_sql)
+            await conn.execute(alter_sql)
         
         logger.info("Database tables created/verified")
     
@@ -236,6 +276,8 @@ class DatabaseManager:
                     
                     # Insert new article
                     article_id = await self._insert_article(conn, stored_article)
+                    if stored_article.event_dates:
+                        await self.store_article_events(conn, article_id, stored_article.event_dates)
                     new_count += 1
                     logger.debug(f"Stored new article (ID {article_id}): {stored_article.title[:50]}...")
                 
@@ -269,13 +311,17 @@ class DatabaseManager:
         INSERT INTO articles (
             title, content, content_hash, url, source_type, source_url, source_file,
             page_number, column_number, section, author, tags, word_count,
-            date_published, date_extracted, processing_status
+            date_published, date_extracted, processing_status,
+            raw_html, metadata, location_name, location_lat, location_lon, event_dates
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+            $14, $15, $16, $17, $18, $19, $20, $21, $22
         ) RETURNING id
         """
         
         tags_json = json.dumps(article.tags) if article.tags else None
+        metadata_json = json.dumps(article.metadata) if article.metadata else None
+        event_dates_json = json.dumps(article.event_dates) if article.event_dates else None
         
         result = await conn.fetchrow(
             sql,
@@ -294,7 +340,13 @@ class DatabaseManager:
             article.word_count,
             article.date_published,
             article.date_extracted,
-            article.processing_status
+            article.processing_status,
+            article.raw_html,
+            metadata_json,
+            article.location_name,
+            article.location_lat,
+            article.location_lon,
+            event_dates_json
         )
         
         return result['id']
@@ -344,7 +396,44 @@ class DatabaseManager:
             error_message,
             metadata_json
         )
-    
+
+    def _attach_events(self, article: StoredArticle) -> None:
+        try:
+            events = extract_events(article.content)
+        except Exception as exc:
+            logger.debug(f"Event extraction failed for article {article.title[:40]}: {exc}")
+            events = []
+
+        if events:
+            article.event_dates = events
+            if not article.metadata:
+                article.metadata = {}
+            article.metadata.setdefault('events', events)
+            if not article.location_name:
+                for event in events:
+                    if event.get('location_name'):
+                        article.location_name = event['location_name']
+                        break
+
+    async def store_article_events(self, conn: Connection, article_id: int, events: List[Dict]) -> None:
+        await conn.execute("DELETE FROM article_events WHERE article_id = $1", article_id)
+        for event in events:
+            await conn.execute(
+                """
+                INSERT INTO article_events (
+                    article_id, title, description, start_time, end_time,
+                    location_name, location_meta
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                article_id,
+                event.get('title') or 'Community Event',
+                event.get('context'),
+                event.get('start_time'),
+                event.get('end_time'),
+                event.get('location_name'),
+                json.dumps(event) if event else None,
+            )
+
     def _convert_to_stored_article(self, 
                                  article: Union[PDFArticle, HTMLArticle, StoredArticle],
                                  source_identifier: str,
@@ -359,7 +448,7 @@ class DatabaseManager:
         ).hexdigest()
         
         if isinstance(article, PDFArticle):
-            return StoredArticle(
+            stored = StoredArticle(
                 id=0,  # Will be set by database
                 title=article.title,
                 content=article.content,
@@ -371,10 +460,20 @@ class DatabaseManager:
                 section=article.section,
                 word_count=article.word_count,
                 date_published=article.date_published,
-                date_extracted=datetime.utcnow()
+                date_extracted=datetime.utcnow(),
+                metadata={
+                    'bounds': {
+                        'x0': article.x0,
+                        'y0': article.y0,
+                        'x1': article.x1,
+                        'y1': article.y1,
+                    }
+                }
             )
+            self._attach_events(stored)
+            return stored
         elif isinstance(article, HTMLArticle):
-            return StoredArticle(
+            stored = StoredArticle(
                 id=0,  # Will be set by database
                 title=article.title,
                 content=article.content,
@@ -387,8 +486,16 @@ class DatabaseManager:
                 tags=article.tags,
                 word_count=article.word_count,
                 date_published=article.date_published,
-                date_extracted=datetime.utcnow()
+                date_extracted=datetime.utcnow(),
+                raw_html=article.raw_html,
+                metadata={'tags': article.tags} if article.tags else None,
+                location_name=getattr(article, 'location_name', None),
+                location_lat=getattr(article, 'location_lat', None),
+                location_lon=getattr(article, 'location_lon', None),
+                event_dates=getattr(article, 'event_dates', None)
             )
+            self._attach_events(stored)
+            return stored
         else:
             raise ValueError(f"Unsupported article type: {type(article)}")
     
