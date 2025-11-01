@@ -400,8 +400,8 @@ clearSearchBtn.addEventListener('click', () => {
   searchInput.focus();
 });
 
-feedTab.addEventListener('click', () => switchView('feed'));
-eventsTab.addEventListener('click', () => switchView('events'));
+if (feedTab) feedTab.addEventListener('click', () => switchView('feed'));
+if (eventsTab) eventsTab.addEventListener('click', () => switchView('events'));
 
 (async () => {
   try {

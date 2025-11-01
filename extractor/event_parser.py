@@ -1,16 +1,27 @@
 import re
 from typing import Dict, List, Optional
+from datetime import datetime, timedelta
 
 from dateparser.search import search_dates
 
 WEEKDAY_PATTERN = re.compile(r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b", re.IGNORECASE)
-LOCATION_PATTERN = re.compile(r"\b(?:at|in|inside|outside|on)\s+([A-Z][^.,;\n]+)", re.IGNORECASE)
+MONTH_PATTERN = re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sep\.?|Sept\.?|Oct\.?|Nov\.?|Dec\.?)\b", re.IGNORECASE)
+DATE_NUMERIC = re.compile(r"\b(0?[1-9]|1[0-2])/(0?[1-9]|[12][0-9]|3[01])/(20\d{2})\b")
+TIME_PATTERN = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s?(am|pm|a\.m\.|p\.m\.)\b", re.IGNORECASE)
+LOCATION_PATTERN = re.compile(r"\b(?:at|in|inside|outside|on)\s+([A-Z][^.,;\n]{2,80})", re.IGNORECASE)
 
 
 def extract_events(text: str) -> List[Dict]:
-    """Extract candidate events from article text."""
+    """Extract candidate events from article text (strict heuristics).
+
+    We favor precision over recall to avoid hallucinated or irrelevant dates.
+    """
     events: List[Dict] = []
     if not text:
+        return events
+
+    # Quick reject for obviously non-calendar content (headlines/boilerplate)
+    if text.strip().lower().startswith("key points:"):
         return events
 
     matches = search_dates(
@@ -24,28 +35,53 @@ def extract_events(text: str) -> List[Dict]:
         return events
 
     seen_times = set()
+    now = datetime.utcnow()
+    future_limit = now + timedelta(days=365)  # ignore dates more than a year out
 
     for snippet, dt in matches:
-        if dt is None:
+        if not dt:
             continue
+        # Filter implausible years
         if dt.year < 2000 or dt.year > 2050:
             continue
-        key = (dt.isoformat(), snippet.strip())
+        # Ignore far-future dates
+        if dt > future_limit:
+            continue
+
+        context = _extract_context(text, snippet)
+        ctx = context.strip()
+        if not ctx:
+            continue
+
+        # Heuristics to avoid non-event narrative
+        too_long = len(ctx) > 220
+        has_weekday_or_month = bool(WEEKDAY_PATTERN.search(ctx) or MONTH_PATTERN.search(ctx) or DATE_NUMERIC.search(ctx))
+        has_time_or_at = bool(TIME_PATTERN.search(ctx) or re.search(r"\b(at|from)\b", ctx, re.IGNORECASE))
+        looks_like_bullets = ctx.lower().startswith(("key points", "sentiment"))
+        contains_money = re.search(r"\$\s?\d", ctx)
+
+        # Require date signal AND a simple location/time cue; reject noisy lines
+        if too_long or not has_weekday_or_month or not has_time_or_at or looks_like_bullets or contains_money:
+            continue
+
+        location = extract_location(ctx)
+
+        key = (dt.replace(second=0, microsecond=0).isoformat(), ctx[:80])
         if key in seen_times:
             continue
         seen_times.add(key)
 
-        context = _extract_context(text, snippet)
-        location = extract_location(context)
-
         events.append(
             {
-                "title": context.strip()[:200] or snippet.strip(),
+                "title": ctx[:200],
                 "start_time": dt.isoformat(),
                 "location_name": location,
-                "context": context.strip(),
+                "context": ctx,
             }
         )
+
+        if len(events) >= 5:  # cap to avoid spammy articles
+            break
 
     return events
 
@@ -57,7 +93,9 @@ def extract_location(text: str) -> Optional[str]:
     if match:
         candidate = match.group(1).strip()
         candidate = re.sub(r"\s+", " ", candidate)
-        return candidate[:200]
+        # Trim trailing fillers
+        candidate = re.sub(r"\s+(and|with|for)\b.*$", "", candidate, flags=re.IGNORECASE)
+        return candidate[:120]
     return None
 
 
