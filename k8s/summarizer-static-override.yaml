@@ -433,7 +433,7 @@ data:
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>News Analyzer • Daily Feed</title>
-        <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v=2" />
       </head>
       <body>
         <header class="header">
@@ -477,7 +477,7 @@ data:
           <a href="/health" target="_blank" rel="noopener">API health</a>
         </footer>
     
-        <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=2" defer></script>
       </body>
       </html>
   style.css: |
