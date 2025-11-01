@@ -203,7 +203,15 @@ class ExtractionProcessor:
                     except ValueError:
                         pass  # Invalid date format, continue processing
             
-            # Download file content
+            # Retrieve metadata and download file content
+            metadata = {}
+            try:
+                stat = self.minio_client.stat_object(self.settings.minio_bucket, object_name)
+                if stat.metadata:
+                    metadata = {k.lower(): v for k, v in stat.metadata.items()}
+            except S3Error as meta_err:
+                logger.debug(f"No metadata for {object_name}: {meta_err}")
+
             content = self._download_cached_file(object_name)
             if not content:
                 file_result['error_message'] = 'Failed to download content'
@@ -224,8 +232,19 @@ class ExtractionProcessor:
                 return file_result
             
             file_result['articles_found'] = len(articles)
-            
+
             if articles:
+                publication = (
+                    metadata.get('publication')
+                    or metadata.get('x-amz-meta-publication')
+                )
+                if publication:
+                    for article in articles:
+                        if hasattr(article, 'metadata'):
+                            article.metadata = article.metadata or {}
+                            article.metadata['publication'] = publication
+                        if hasattr(article, 'section') and not article.section:
+                            article.section = publication
                 # Store articles in database
                 new_count, duplicate_count = await self.db_manager.store_articles(
                     articles, object_name, file_type

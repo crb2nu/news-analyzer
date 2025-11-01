@@ -3,6 +3,7 @@
 ROOT := $(CURDIR)
 SYS_PYTHON := $(or $(shell command -v python3.13),$(shell command -v python3.12),$(shell command -v python3.11),$(shell command -v python3))
 FORCE_ARG :=$(if $(FORCE), --force,)
+PUBLICATIONS := Smyth County News & Messenger,The News & Press,The Bland County Messenger,The Floyd Press,Wytheville Enterprise,Washington County News
 
 # Kick off the extractor CronJob as an ad-hoc job.
 extractor-run:
@@ -236,10 +237,12 @@ scrape-range:
 	  "              key: SCRAPER_USER_AGENT" \
 	  "        - name: START_DATE" \
 	  "          value: $(START)" \
-	  "        - name: END_DATE" \
-	  "          value: $(END)" \
-	  "        - name: FORCE_DOWNLOAD" \
-	  "          value: \"$(if $(FORCE),1,0)\"" \
+  "        - name: END_DATE" \
+  "          value: $(END)" \
+  "        - name: FORCE_DOWNLOAD" \
+  "          value: \"$(if $(FORCE),1,0)\"" \
+  "        - name: PUBLICATIONS" \
+  "          value: \"$(PUBLICATIONS)\"" \
 	  "        command:" \
 	  "        - /bin/sh" \
 	  "        - -c" \
@@ -259,15 +262,23 @@ scrape-range:
 	  "                  print(cur.isoformat())" \
 	  "              cur += timedelta(days=1)" \
 	  "          PY" \
-	  "          while read d; do" \
-	  '            [ -z "$$d" ] && continue' \
-	  '            echo "Downloading edition $$d"' \
-	  "            extra=\"\"" \
-	  '            if [ "$$FORCE_DOWNLOAD" = "1" ]; then' \
-	  "              extra=\"--force\"" \
-	  "            fi" \
-	  '            python -m scraper.downloader --date $$d $$extra --storage /app/storage/storage_state.json' \
-	  "          done < /tmp/download-dates.txt" \
+  "          PUB_LIST=\"\${PUBLICATIONS:-$(PUBLICATIONS)}\"" \
+  "          while read d; do" \
+  '            [ -z "$$d" ] && continue' \
+  '            echo "Processing edition $$d"' \
+  "            extra=\"\"" \
+  '            if [ "$$FORCE_DOWNLOAD" = "1" ]; then' \
+  "              extra=\"--force\"" \
+  "            fi" \
+  '            OLD_IFS=$$IFS' \
+  '            IFS=,; for pub in $${PUB_LIST}; do' \
+  '              pub_trim=$(echo "$$pub" | sed -e "s/^ *//" -e "s/ *$$//")' \
+  '              [ -z "$$pub_trim" ] && continue' \
+  '              echo "  -> $$pub_trim"' \
+  '              python -m scraper.downloader --date $$d $$extra --publication "$$pub_trim" --storage /app/storage/storage_state.json' \
+  '            done' \
+  '            IFS=$$OLD_IFS' \
+  "          done < /tmp/download-dates.txt" \
 	  "        volumeMounts:" \
 	  "        - name: session-storage" \
 	  "          mountPath: /app/storage" \
