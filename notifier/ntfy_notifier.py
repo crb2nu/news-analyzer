@@ -15,20 +15,95 @@ from base64 import b64encode
 import argparse
 import sys
 from pathlib import Path
+from dataclasses import dataclass
+from contextlib import asynccontextmanager
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from extractor.database import DatabaseManager, StoredArticle
-from scraper.config import Settings
+import asyncpg
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+class NotifierSettings(BaseSettings):
+    """Configuration options for the notifier service."""
+
+    database_url: str
+    ntfy_url: str = "http://ntfy-service.news-analyzer.svc.cluster.local"
+    ntfy_topic: str = "news-digest"
+    ntfy_token: Optional[str] = None
+    ntfy_attach_full: bool = False
+    slack_webhook_url: Optional[str] = None
+    log_level: str = "INFO"
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
+
+
+@dataclass
+class StoredArticle:
+    """Minimal representation of an article used for notifications."""
+    id: int
+    title: str
+    content: str
+    content_hash: str
+    url: Optional[str] = None
+    source_type: str = 'unknown'
+    source_url: Optional[str] = None
+    source_file: Optional[str] = None
+    page_number: Optional[int] = None
+    column_number: Optional[int] = None
+    section: Optional[str] = None
+    author: Optional[str] = None
+    tags: Optional[List[str]] = None
+    word_count: int = 0
+    date_published: Optional[datetime] = None
+    date_extracted: Optional[datetime] = None
+    date_created: Optional[datetime] = None
+    date_updated: Optional[datetime] = None
+    processing_status: str = 'extracted'
+
+
+class DatabaseManager:
+    """Lightweight asyncpg wrapper for notifier read/write operations."""
+
+    def __init__(self, database_url: str, pool_size: int = 5):
+        self.database_url = database_url
+        self.pool_size = pool_size
+        self.pool: Optional[asyncpg.Pool] = None
+
+    async def initialize(self):
+        """Establish the asyncpg connection pool."""
+        self.pool = await asyncpg.create_pool(
+            self.database_url,
+            min_size=1,
+            max_size=self.pool_size,
+            command_timeout=60,
+        )
+        logger.info("Notifier database pool initialized")
+
+    async def close(self):
+        """Close the connection pool."""
+        if self.pool:
+            await self.pool.close()
+            self.pool = None
+            logger.info("Notifier database pool closed")
+
+    @asynccontextmanager
+    async def get_connection(self):
+        """Yield a pooled connection."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized; call initialize() first")
+        async with self.pool.acquire() as conn:
+            yield conn
 
 
 class NtfyNotifier:
     """Handles push notifications via ntfy."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: NotifierSettings):
         self.settings = settings
         self.ntfy_url = settings.ntfy_url or "http://ntfy-service.news-analyzer.svc.cluster.local"
         self.ntfy_topic = settings.ntfy_topic or "news-digest"
@@ -172,7 +247,7 @@ class NtfyNotifier:
 class UpdatedNotificationService:
     """Updated notification service with ntfy support."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: NotifierSettings):
         self.settings = settings
         self.db_manager = DatabaseManager(settings.database_url)
         
@@ -362,9 +437,9 @@ async def async_main(target_date: Optional[str] = None):
     logger = logging.getLogger(__name__)
     
     try:
-        # Load settings
-        from scraper.config import Settings
-        settings = Settings()
+        # Load notifier-specific settings
+        settings = NotifierSettings()
+        logging.getLogger().setLevel(settings.log_level.upper())
         
         # Initialize the notification service
         service = UpdatedNotificationService(settings)

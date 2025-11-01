@@ -12,14 +12,17 @@ RUN apt-get update && apt-get install -y \
 RUN pip install poetry==1.8.5
 
 # Copy dependency files
-COPY pyproject.toml poetry.lock ./
+COPY notifier/pyproject.toml notifier/poetry.lock ./
 
 # Install dependencies
 RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi
 
-# Copy application code
-COPY . .
+# Copy application code into package directory
+COPY notifier /app/notifier
 
-# Run the application
-CMD ["python", "-m", "notifier"]
+# Expose packages on PYTHONPATH for module execution
+ENV PYTHONPATH=/app
+
+# Run the notifier module directly
+CMD ["python", "-m", "notifier.ntfy_notifier"]

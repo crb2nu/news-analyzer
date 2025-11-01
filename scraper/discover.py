@@ -123,8 +123,8 @@ class EditionDiscoverer:
                 context = browser.new_context(storage_state=str(self.storage_path))
                 page = context.new_page()
                 
-                # Navigate to the e-edition homepage
-                base_url = "https://swvatoday.com/eedition/smyth_county/"
+                # Navigate to the e-edition root (allows switching across publications)
+                base_url = "https://swvatoday.com/eedition/"
                 logger.info(f"Navigating to {base_url}")
                 page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
                 page.wait_for_timeout(2000)

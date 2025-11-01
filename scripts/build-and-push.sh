@@ -117,7 +117,7 @@ build_component() {
       dockerfile="summarizer/Dockerfile"
       ;;
     notifier)
-      context="notifier"
+      context="."
       dockerfile="notifier/Dockerfile"
       ;;
     *)
