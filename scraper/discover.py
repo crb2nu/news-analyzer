@@ -18,10 +18,28 @@ from datetime import datetime, date
 from typing import List, Dict, Optional, Union
 from dataclasses import dataclass
 import json
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+DEFAULT_PUBLICATION = "Smyth County News & Messenger"
+PUBLICATION_TABS = [
+    "Smyth County News & Messenger",
+    "The News & Press",
+    "The Bland County Messenger",
+    "The Floyd Press",
+    "Wytheville Enterprise",
+    "Washington County News",
+]
+PUBLICATION_SLUGS = {
+    "smyth_county": "Smyth County News & Messenger",
+    "news_press": "The News & Press",
+    "bland_county": "The Bland County Messenger",
+    "floyd_press": "The Floyd Press",
+    "wytheville": "Wytheville Enterprise",
+    "washington_county": "Washington County News",
+}
 
 
 @dataclass
@@ -41,6 +59,7 @@ class Edition:
     pages: List[EditionPage]
     base_url: str
     total_pages: int
+    publication: str = DEFAULT_PUBLICATION
 
 
 class EditionDiscoverer:
@@ -57,16 +76,20 @@ class EditionDiscoverer:
             return login(self.storage_path)
         return True
     
-    def discover_today(self) -> Optional[Edition]:
+    def get_available_publications(self) -> List[str]:
+        return PUBLICATION_TABS.copy()
+
+    def discover_today(self, publication: Optional[str] = None) -> Optional[Edition]:
         """Discover today's edition"""
-        return self.discover_date(date.today())
-    
-    def discover_date(self, target_date: date) -> Optional[Edition]:
+        return self.discover_date(date.today(), publication)
+
+    def discover_date(self, target_date: date, publication: Optional[str] = None) -> Optional[Edition]:
         """
         Discover e-edition content for a specific date.
         
         Args:
             target_date: The date to discover content for
+            publication: Optional publication/tab name to target
             
         Returns:
             Edition object if found, None otherwise
@@ -75,6 +98,8 @@ class EditionDiscoverer:
             logger.error("Cannot authenticate - discovery failed")
             return None
         
+        publication = publication or DEFAULT_PUBLICATION
+        selected_publication = publication
         try:
             with sync_playwright() as p:
                 # Get proxy configuration
@@ -105,25 +130,38 @@ class EditionDiscoverer:
                 page.wait_for_timeout(2000)
 
                 self._dismiss_cookie_banner(page)
-                self._select_publication(page, "Smyth County News & Messenger")
+                if not self._select_publication(page, publication):
+                    logger.info("Could not select publication %s; staying on default", publication)
+                    selected_publication = DEFAULT_PUBLICATION
+                else:
+                    selected_publication = publication
+                    base_url = self._derive_base_url(page.url)
 
                 replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
                 if isinstance(replacement_page, Page):
                     page = replacement_page
+                    base_url = self._derive_base_url(page.url)
                 elif isinstance(replacement_page, str):
                     page.goto(replacement_page, timeout=60000, wait_until="domcontentloaded")
                     page.wait_for_load_state("networkidle", timeout=15000)
+                    base_url = self._derive_base_url(page.url)
                 else:
                     # Fall back to in-viewer date navigation if search fails
                     if not self._navigate_to_date(page, target_date):
                         logger.warning(f"Could not navigate directly to {target_date}; attempting current edition")
+                        base_url = self._derive_base_url(page.url)
+                current_publication = selected_publication or self._infer_publication_from_url(page.url)
+                if current_publication:
+                    selected_publication = current_publication
 
                 # Wait briefly for viewer content to settle
                 page.wait_for_timeout(2000)
 
-                edition = self._discover_edition_pages(page, base_url)
-
+                edition = self._discover_edition_pages(page, target_date, base_url)
+                
                 browser.close()
+                if edition:
+                    edition.publication = selected_publication
                 return edition
                 
         except Exception as e:
@@ -699,6 +737,27 @@ class EditionDiscoverer:
                 variants.add(target_date.strftime(fmt))
         variants.discard("")
         return list(variants)
+
+    def _derive_base_url(self, url: str) -> str:
+        if not url:
+            return "https://swvatoday.com/eedition/"
+        parsed = urlparse(url)
+        path = parsed.path
+        if not path.endswith('/'):
+            path = path.rsplit('/', 1)[0] + '/'
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+    def _infer_publication_from_url(self, url: str) -> Optional[str]:
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return None
+        parts = [part for part in parsed.path.split('/') if part]
+        for part in reversed(parts):
+            slug = part.lower().replace('-', '_')
+            if slug in PUBLICATION_SLUGS:
+                return PUBLICATION_SLUGS[slug]
+        return None
 
     def _normalize_url(self, base_url: str, href: Optional[str]) -> Optional[str]:
         """Convert relative or protocol-relative URLs to absolute ones"""

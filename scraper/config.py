@@ -62,3 +62,19 @@ class Settings(BaseSettings):
             "username": self.smartproxy_username,
             "password": self.smartproxy_password
         }
+
+    # Facebook / Meta Graph API configuration (compliant alternative to scraping)
+    # For pages you manage, supply a user access token with the required permissions
+    # (e.g., pages_read_engagement, pages_manage_metadata). See docs/facebook_auth.md.
+    facebook_app_id: str | None = None
+    facebook_app_secret: str | None = None
+    facebook_user_access_token: str | None = None
+    # Comma-separated list of Facebook Page IDs you manage (numeric IDs or usernames resolved to IDs elsewhere)
+    facebook_page_ids: str | None = None
+    # Graph API version to use (e.g., v19.0)
+    facebook_graph_version: str = "v19.0"
+
+    def list_facebook_pages(self) -> list[str]:
+        if not self.facebook_page_ids:
+            return []
+        return [p.strip() for p in self.facebook_page_ids.split(",") if p.strip()]

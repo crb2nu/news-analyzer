@@ -3,6 +3,7 @@ Download and caching system with MinIO support for Kubernetes deployment.
 """
 
 import os
+import re
 import hashlib
 import logging
 from pathlib import Path
@@ -19,7 +20,7 @@ from minio.error import S3Error
 
 # Local imports
 from .config import Settings
-from .discover import Edition, EditionPage
+from .discover import Edition, EditionPage, PUBLICATION_TABS, DEFAULT_PUBLICATION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -101,12 +102,19 @@ class DownloadCache:
         """Generate SHA-256 hash of content"""
         return hashlib.sha256(content).hexdigest()
     
-    def _get_object_key(self, edition_date: date, page: EditionPage) -> str:
+    def _slugify(self, text: Optional[str]) -> str:
+        if not text:
+            return "default"
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip('-')
+        return slug or "default"
+
+    def _get_object_key(self, edition: Edition, page: EditionPage) -> str:
         """Generate MinIO object key for a page"""
         url_hash = hashlib.md5(page.url.encode()).hexdigest()[:8]
         extension = self._get_file_extension(page.url, page.format)
-        
-        return f"{edition_date.isoformat()}/page_{page.page_number:03d}_{url_hash}{extension}"
+
+        publication_slug = self._slugify(getattr(edition, "publication", None))
+        return f"{edition.date.isoformat()}/{publication_slug}_page_{page.page_number:03d}_{url_hash}{extension}"
     
     def _get_file_extension(self, url: str, format_type: str) -> str:
         """Determine file extension based on URL and format"""
@@ -163,12 +171,12 @@ class DownloadCache:
         logger.error(f"All {max_retries} download attempts failed for {url}")
         return None
     
-    def is_cached(self, edition_date: date, page: EditionPage) -> bool:
+    def is_cached(self, edition: Edition, page: EditionPage) -> bool:
         """Check if page content is already cached in MinIO"""
         if not self.minio_client:
             return False
-        
-        object_key = self._get_object_key(edition_date, page)
+
+        object_key = self._get_object_key(edition, page)
         
         try:
             self.minio_client.stat_object(self.settings.minio_bucket, object_key)
@@ -176,13 +184,13 @@ class DownloadCache:
         except S3Error:
             return False
     
-    def cache_content(self, edition_date: date, page: EditionPage, content: bytes) -> bool:
+    def cache_content(self, edition: Edition, page: EditionPage, content: bytes) -> bool:
         """Store content in MinIO cache"""
         if not self.minio_client:
             logger.error("MinIO client not available")
             return False
-        
-        object_key = self._get_object_key(edition_date, page)
+
+        object_key = self._get_object_key(edition, page)
         
         try:
             # Create metadata
@@ -194,6 +202,8 @@ class DownloadCache:
                 'cached_at': datetime.utcnow().isoformat(),
             }
             
+            if getattr(edition, "publication", None):
+                metadata['publication'] = edition.publication
             if page.section:
                 metadata['section'] = page.section
             if page.title:
@@ -218,12 +228,12 @@ class DownloadCache:
             logger.error(f"Failed to cache content: {str(e)}")
             return False
     
-    def get_cached_content(self, edition_date: date, page: EditionPage) -> Optional[bytes]:
+    def get_cached_content(self, edition: Edition, page: EditionPage) -> Optional[bytes]:
         """Retrieve content from MinIO cache"""
         if not self.minio_client:
             return None
         
-        object_key = self._get_object_key(edition_date, page)
+        object_key = self._get_object_key(edition, page)
         
         try:
             response = self.minio_client.get_object(self.settings.minio_bucket, object_key)
@@ -241,7 +251,7 @@ class DownloadCache:
             logger.error(f"Failed to retrieve cached content: {str(e)}")
             return None
     
-    def download_page(self, edition_date: date, page: EditionPage, force_refresh: bool = False) -> Optional[bytes]:
+    def download_page(self, edition: Edition, page: EditionPage, force_refresh: bool = False) -> Optional[bytes]:
         """
         Download a single page, using cache if available.
         
@@ -254,8 +264,8 @@ class DownloadCache:
             Content bytes if successful, None otherwise
         """
         # Check cache first (unless force refresh)
-        if not force_refresh and self.is_cached(edition_date, page):
-            content = self.get_cached_content(edition_date, page)
+        if not force_refresh and self.is_cached(edition, page):
+            content = self.get_cached_content(edition, page)
             if content:
                 return content
         
@@ -264,7 +274,7 @@ class DownloadCache:
         
         if content:
             # Cache the downloaded content
-            if self.cache_content(edition_date, page, content):
+            if self.cache_content(edition, page, content):
                 logger.info(f"Downloaded and cached page {page.page_number}")
             else:
                 logger.warning(f"Downloaded page {page.page_number} but caching failed")
@@ -293,16 +303,17 @@ class DownloadCache:
             'downloaded_pages': [],
             'failed_pages': [],
             'start_time': datetime.utcnow().isoformat(),
+            'publication': getattr(edition, 'publication', DEFAULT_PUBLICATION),
         }
         
-        logger.info(f"Starting download of {edition.total_pages} pages for {edition.date}")
+        logger.info(f"Starting download of {edition.total_pages} pages for {edition.date} ({getattr(edition, 'publication', DEFAULT_PUBLICATION)})")
         
         for page in edition.pages:
             try:
                 # Check if already cached
-                was_cached = self.is_cached(edition.date, page)
-                
-                content = self.download_page(edition.date, page, force_refresh)
+                was_cached = self.is_cached(edition, page)
+
+                content = self.download_page(edition, page, force_refresh)
                 
                 if content:
                     results['successful_downloads'] += 1
@@ -315,7 +326,8 @@ class DownloadCache:
                         'section': page.section,
                         'format': page.format,
                         'size_bytes': len(content),
-                        'was_cached': was_cached and not force_refresh
+                        'was_cached': was_cached and not force_refresh,
+                        'publication': getattr(edition, 'publication', DEFAULT_PUBLICATION),
                     })
                     
                     logger.info(f"Page {page.page_number}: Success ({len(content)} bytes)")
@@ -425,6 +437,9 @@ def main():
     parser.add_argument("--force", action="store_true", help="Force download even if cached")
     parser.add_argument("--cleanup", type=int, help="Clean up cache older than N days")
     parser.add_argument("--list-cache", action="store_true", help="List cached editions")
+    parser.add_argument("--list-publications", action="store_true", help="List supported publications and exit")
+    parser.add_argument("--publication", action="append", help="Specific publication/tab to download (may repeat)")
+    parser.add_argument("--all-publications", action="store_true", help="Download all supported publications")
     parser.add_argument("--storage", type=str, default="storage_state.json", help="Session storage file")
     
     args = parser.parse_args()
@@ -432,6 +447,15 @@ def main():
     # Initialize downloader
     downloader = DownloadCache()
     
+    discoverer = EditionDiscoverer(Path(args.storage))
+
+    if args.list_publications:
+        pubs = discoverer.get_available_publications()
+        print("Available publications:")
+        for pub in pubs:
+            print(f"  {pub}")
+        return
+
     if args.list_cache:
         cached_dates = downloader.list_cached_editions()
         print(f"Cached editions ({len(cached_dates)}):")
@@ -454,28 +478,40 @@ def main():
     else:
         target_date = date.today()
     
-    # Discover edition
-    discoverer = EditionDiscoverer(Path(args.storage))
-    edition = discoverer.discover_date(target_date)
-    
-    if not edition:
-        print(f"No edition found for {target_date}")
-        exit(1)
-    
-    # Download edition
-    results = downloader.download_edition(edition, force_refresh=args.force)
-    
-    print(f"Download Results for {target_date}:")
-    print(f"  Total pages: {results['total_pages']}")
-    print(f"  Successful: {results['successful_downloads']}")
-    print(f"  Failed: {results['failed_downloads']}")
-    print(f"  From cache: {results['cached_pages']}")
-    print(f"  Success rate: {results['success_rate']:.1%}")
-    
-    if results['failed_pages']:
-        print("\nFailed pages:")
-        for failed in results['failed_pages']:
-            print(f"  Page {failed['page_number']}: {failed['error']}")
+    # Determine publications to process
+    publications: List[str]
+    if args.all_publications:
+        publications = discoverer.get_available_publications()
+    elif args.publication:
+        publications = args.publication
+    else:
+        publications = [DEFAULT_PUBLICATION]
+
+    combined_results = []
+    for pub in publications:
+        edition = discoverer.discover_date(target_date, publication=pub)
+        if not edition:
+            print(f"No edition found for {target_date} ({pub})")
+            continue
+
+        results = downloader.download_edition(edition, force_refresh=args.force)
+        combined_results.append(results)
+
+        print(f"Download Results for {target_date} — {results['publication']}:")
+        print(f"  Total pages: {results['total_pages']}")
+        print(f"  Successful: {results['successful_downloads']}")
+        print(f"  Failed: {results['failed_downloads']}")
+        print(f"  From cache: {results['cached_pages']}")
+        print(f"  Success rate: {results['success_rate']:.1%}")
+
+        if results['failed_pages']:
+            print("\nFailed pages:")
+            for failed in results['failed_pages']:
+                print(f"  Page {failed['page_number']}: {failed['error']}")
+        print()
+
+    if not combined_results:
+        print("No editions were downloaded.")
 
 
 if __name__ == "__main__":
