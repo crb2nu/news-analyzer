@@ -3,13 +3,19 @@ Edition discovery module for finding available e-edition content.
 """
 
 from pathlib import Path
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from contextlib import suppress
+from playwright.sync_api import (
+    sync_playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    BrowserContext,
+    Page,
+)
 from .config import Settings
 from .login import verify_session, login
 import logging
 import re
 from datetime import datetime, date
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from dataclasses import dataclass
 import json
 from urllib.parse import urljoin
@@ -97,10 +103,26 @@ class EditionDiscoverer:
                 logger.info(f"Navigating to {base_url}")
                 page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
                 page.wait_for_timeout(2000)
-                
-                # Check if we need to navigate to a specific date
-                edition = self._discover_edition_pages(page, target_date, base_url)
-                
+
+                self._dismiss_cookie_banner(page)
+                self._select_publication(page, "Smyth County News & Messenger")
+
+                replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
+                if isinstance(replacement_page, Page):
+                    page = replacement_page
+                elif isinstance(replacement_page, str):
+                    page.goto(replacement_page, timeout=60000, wait_until="domcontentloaded")
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                else:
+                    # Fall back to in-viewer date navigation if search fails
+                    if not self._navigate_to_date(page, target_date):
+                        logger.warning(f"Could not navigate directly to {target_date}; attempting current edition")
+
+                # Wait briefly for viewer content to settle
+                page.wait_for_timeout(2000)
+
+                edition = self._discover_edition_pages(page, base_url)
+
                 browser.close()
                 return edition
                 
@@ -350,6 +372,69 @@ class EditionDiscoverer:
         pages.sort(key=lambda p: (p.page_number, p.section or ""))
         return pages
     
+    def _open_edition_from_search(
+        self,
+        context: BrowserContext,
+        page: Page,
+        target_date: date,
+        base_url: str,
+    ) -> Optional[Union[str, Page]]:
+        """Attempt to load the requested edition via the e-edition search widget."""
+        try:
+            self._ensure_search_panel_visible(page)
+
+            date_value = target_date.strftime("%m/%d/%Y")
+            self._fill_input_candidates(
+                page,
+                [
+                    "input[placeholder*='from' i]",
+                    "input[name*='from']",
+                    "input[id*='from']",
+                ],
+                date_value,
+            )
+            self._fill_input_candidates(
+                page,
+                [
+                    "input[placeholder*='to' i]",
+                    "input[name*='to']",
+                    "input[id*='to']",
+                ],
+                date_value,
+            )
+
+            self._set_results_per_page(page)
+
+            search_buttons = page.locator("form button:has-text('Search')")
+            if search_buttons.count() == 0:
+                search_buttons = page.locator("button:has-text('Search')")
+
+            if search_buttons.count() == 0:
+                return None
+
+            with suppress(Exception):
+                search_buttons.last.click()
+                page.wait_for_load_state("networkidle", timeout=20000)
+                page.wait_for_timeout(1500)
+
+            link_locator = self._find_result_link(page, target_date)
+            if not link_locator:
+                return None
+
+            href = link_locator.get_attribute("href")
+            if href:
+                return self._normalize_url(base_url, href)
+
+            with context.expect_page() as popup_event:
+                link_locator.click()
+            new_page = popup_event.value
+            new_page.wait_for_load_state("networkidle", timeout=20000)
+            return new_page
+
+        except Exception as exc:
+            logger.error(f"Edition search failed: {exc}")
+            return None
+
     def _navigate_to_date(self, page, target_date: date) -> bool:
         """
         Navigate to a specific date in the PageSuite e-edition.
@@ -484,6 +569,136 @@ class EditionDiscoverer:
             logger.error(f"PageSuite viewer discovery failed: {str(e)}")
         
         return pages
+
+    def _dismiss_cookie_banner(self, page: Page) -> None:
+        selectors = [
+            "button:has-text('Accept')",
+            "button:has-text('I Agree')",
+            "button[aria-label*='Accept']",
+        ]
+        for selector in selectors:
+            with suppress(Exception):
+                button = page.locator(selector).first
+                if button.count():
+                    button.click()
+                    page.wait_for_timeout(500)
+                    break
+
+    def _select_publication(self, page: Page, publication_name: str) -> bool:
+        selectors = [
+            f"a:has-text('{publication_name}')",
+            f"button:has-text('{publication_name}')",
+            f"[role='tab']:has-text('{publication_name}')",
+            f"[data-publication-name*='{publication_name}']",
+        ]
+        for selector in selectors:
+            with suppress(Exception):
+                tab = page.locator(selector).first
+                if tab.count():
+                    tab.click()
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                    page.wait_for_timeout(500)
+                    return True
+        return False
+
+    def _ensure_search_panel_visible(self, page: Page) -> None:
+        with suppress(Exception):
+            toggle = page.locator("button:has-text('Search e-Editions')").first
+            if toggle.count():
+                toggle.click()
+                page.wait_for_timeout(300)
+
+    def _fill_input_candidates(self, page: Page, selectors: List[str], value: str) -> bool:
+        for selector in selectors:
+            with suppress(Exception):
+                locator = page.locator(selector).first
+                if locator.count():
+                    locator.click()
+                    locator.fill(value)
+                    return True
+        return False
+
+    def _set_results_per_page(self, page: Page) -> None:
+        select_candidates = [
+            "select[name*='results']",
+            "select[id*='results']",
+            "select[aria-label*='Results']",
+            "select",
+        ]
+        options_to_try = ["20", "25", "30", "50", "100"]
+        for selector in select_candidates:
+            with suppress(Exception):
+                select_input = page.locator(selector).first
+                if not select_input.count():
+                    continue
+                for option in options_to_try:
+                    with suppress(Exception):
+                        select_input.select_option(value=option)
+                        return
+                    with suppress(Exception):
+                        select_input.select_option(label=option)
+                        return
+                with suppress(Exception):
+                    opt_locator = select_input.locator("option")
+                    count = opt_locator.count()
+                    if count:
+                        last_value = opt_locator.nth(count - 1).get_attribute("value")
+                        if last_value:
+                            select_input.select_option(value=last_value)
+                return
+
+    def _find_result_link(self, page: Page, target_date: date):
+        variants = self._format_date_variants(target_date)
+
+        for variant in variants:
+            locator = page.locator(f"a:has-text('{variant}')").first
+            if locator.count():
+                return locator
+
+        date_attr = target_date.strftime("%Y-%m-%d")
+        locator = page.locator(f"[data-date='{date_attr}'] a").first
+        if locator.count():
+            return locator
+
+        link_candidates = page.locator("a[href*='/eedition']")
+        total_links = min(link_candidates.count(), 40)
+        for idx in range(total_links):
+            candidate = link_candidates.nth(idx)
+            with suppress(Exception):
+                text = (candidate.inner_text() or "").strip()
+            if any(variant.lower() in text.lower() for variant in variants):
+                return candidate
+
+        cards = page.locator("[data-date], .search-result, .result-card, article")
+        total_cards = min(cards.count(), 40)
+        for idx in range(total_cards):
+            card = cards.nth(idx)
+            with suppress(Exception):
+                text = (card.inner_text() or "").strip()
+            if any(variant.lower() in text.lower() for variant in variants):
+                link = card.locator("a").first
+                if link.count():
+                    return link
+        return None
+
+    def _format_date_variants(self, target_date: date) -> List[str]:
+        formats = [
+            "%B %-d, %Y",
+            "%B %#d, %Y",
+            "%b %-d, %Y",
+            "%b %#d, %Y",
+            "%A, %B %-d, %Y",
+            "%A, %B %#d, %Y",
+            "%m/%d/%Y",
+            "%#m/%#d/%Y",
+            "%Y-%m-%d",
+        ]
+        variants = set()
+        for fmt in formats:
+            with suppress(ValueError):
+                variants.add(target_date.strftime(fmt))
+        variants.discard("")
+        return list(variants)
 
     def _normalize_url(self, base_url: str, href: Optional[str]) -> Optional[str]:
         """Convert relative or protocol-relative URLs to absolute ones"""

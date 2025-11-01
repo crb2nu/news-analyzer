@@ -316,6 +316,10 @@ class DatabaseManager:
             a.page_number,
             a.date_published,
             a.word_count,
+            a.location_name,
+            a.location_lat,
+            a.location_lon,
+            a.event_dates,
             a.content,
             COALESCE(s.summary_text, '') AS summary_text
         FROM articles a
@@ -348,6 +352,13 @@ class DatabaseManager:
                 section_numeric = section.replace(' ', '').isdigit()
                 section = section if section and not section_numeric else 'General'
 
+                event_dates = row['event_dates']
+                if isinstance(event_dates, str):
+                    try:
+                        event_dates = json.loads(event_dates)
+                    except json.JSONDecodeError:
+                        event_dates = []
+
                 results.append({
                     'id': row['id'],
                     'title': title,
@@ -359,7 +370,9 @@ class DatabaseManager:
                     'source_path': source_path,
                     'page_number': row['page_number'],
                     'location_name': row['location_name'],
-                    'events': json.loads(row['event_dates']) if row['event_dates'] else [],
+                    'location_lat': row['location_lat'],
+                    'location_lon': row['location_lon'],
+                    'events': event_dates if event_dates else [],
                 })
             return results
 

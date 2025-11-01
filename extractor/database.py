@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import hashlib
 import json
 
@@ -415,9 +415,34 @@ class DatabaseManager:
                         article.location_name = event['location_name']
                         break
 
+    def _normalize_datetime(self, value: Union[str, datetime, date, None]) -> Optional[datetime]:
+        """Convert various date-like values to timezone-aware datetimes for storage."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, date):
+            combined = datetime.combine(value, datetime.min.time())
+            return combined.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError:
+                try:
+                    dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    logger.debug("Failed to parse datetime string '%s'", value)
+                    return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return None
+
     async def store_article_events(self, conn: Connection, article_id: int, events: List[Dict]) -> None:
         await conn.execute("DELETE FROM article_events WHERE article_id = $1", article_id)
         for event in events:
+            start_time = self._normalize_datetime(event.get('start_time'))
+            end_time = self._normalize_datetime(event.get('end_time'))
             await conn.execute(
                 """
                 INSERT INTO article_events (
@@ -428,8 +453,8 @@ class DatabaseManager:
                 article_id,
                 event.get('title') or 'Community Event',
                 event.get('context'),
-                event.get('start_time'),
-                event.get('end_time'),
+                start_time,
+                end_time,
                 event.get('location_name'),
                 json.dumps(event) if event else None,
             )
