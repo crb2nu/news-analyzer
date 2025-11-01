@@ -17,6 +17,11 @@ import asyncpg
 from asyncpg import Pool, Connection
 from contextlib import asynccontextmanager
 
+try:
+    from summarizer.utils import derive_fallback_title
+except ImportError:
+    from utils import derive_fallback_title
+
 logger = logging.getLogger(__name__)
 
 
@@ -295,8 +300,11 @@ class DatabaseManager:
             a.section,
             a.url,
             a.source_url,
+            a.source_file,
+            a.page_number,
             a.date_published,
             a.word_count,
+            a.content,
             COALESCE(s.summary_text, '') AS summary_text
         FROM articles a
         LEFT JOIN LATERAL (
@@ -315,13 +323,49 @@ class DatabaseManager:
             rows = await conn.fetch(sql, *params)
             results: List[Dict] = []
             for row in rows:
+                source_path = row['source_url'] or row['url'] or row['source_file']
+                title = derive_fallback_title(
+                    row['title'],
+                    row['content'],
+                    source_path,
+                    row['page_number']
+                )
+                article_url = f"/articles/{row['id']}/source" if source_path else None
+
+                section = row['section'] or 'General'
+                section_numeric = section.replace(' ', '').isdigit()
+                section = section if section and not section_numeric else 'General'
+
                 results.append({
                     'id': row['id'],
-                    'title': row['title'],
-                    'section': row['section'] or 'General',
+                    'title': title,
+                    'section': section,
                     'summary': row['summary_text'] or '',
-                    'url': row['url'] or row['source_url'],
+                    'url': article_url,
                     'date_published': row['date_published'].isoformat() if row['date_published'] else None,
                     'word_count': row['word_count'],
+                    'source_path': source_path,
+                    'page_number': row['page_number'],
                 })
             return results
+
+    async def get_article_by_id(self, article_id: int) -> Optional[Dict]:
+        sql = """
+        SELECT
+            a.id,
+            a.title,
+            a.content,
+            a.url,
+            a.source_url,
+            a.source_file,
+            a.section,
+            a.page_number,
+            a.date_published,
+            a.word_count
+        FROM articles a
+        WHERE a.id = $1
+        """
+
+        async with self.get_connection() as conn:
+            row = await conn.fetchrow(sql, article_id)
+            return dict(row) if row else None

@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Any, Dict, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
@@ -58,3 +59,37 @@ def extract_json_object(raw: str) -> Tuple[Dict[str, Any], bool]:
         "topics": [],
         "confidence_score": 0.6,
     }, True
+
+
+def derive_fallback_title(
+    title: Optional[str],
+    content: Optional[str],
+    source_path: Optional[str],
+    page_number: Optional[int] = None,
+) -> str:
+    """Generate a reasonable title when the stored one is missing."""
+    if title:
+        cleaned = title.strip()
+        if cleaned and not cleaned.lower().startswith("untitled"):
+            return cleaned
+
+    if content:
+        for line in content.split("\n"):
+            line = line.strip()
+            if len(line.split()) >= 3:
+                snippet = line[:200]
+                return snippet + ("..." if len(line) > len(snippet) else "")
+
+    if page_number:
+        return f"Page {page_number}"
+
+    if source_path:
+        name = Path(source_path).name or source_path
+        match = re.search(r"page_(\d+)", name, re.IGNORECASE)
+        if match:
+            return f"Page {int(match.group(1))}"
+        pretty = name.replace('_', ' ').replace('-', ' ').strip()
+        if pretty:
+            return pretty.title()[:200]
+
+    return "Untitled Article"

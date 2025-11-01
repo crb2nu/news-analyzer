@@ -121,7 +121,13 @@ function render(items, context, query) {
     const meta = document.createElement('div');
     meta.className = 'meta';
     const metaParts = [];
-    if (item.section) metaParts.push(item.section);
+    if (item.section && item.section !== 'General') metaParts.push(item.section);
+    if (item.page_number) {
+      metaParts.push(`Page ${item.page_number}`);
+    } else if (item.source_path) {
+      const slug = item.source_path.split('/').pop();
+      if (slug) metaParts.push(slug.replace(/_/g, ' '));
+    }
     const published = fmtDateTime(item.date_published);
     if (published) metaParts.push(`Published ${published}`);
     if (item.word_count) metaParts.push(`${item.word_count} words`);

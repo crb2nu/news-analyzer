@@ -8,16 +8,19 @@ with support for batch processing, rate limiting, and token usage tracking.
 import logging
 import asyncio
 from datetime import datetime, date
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import openai
 from openai import AsyncOpenAI
+from minio import Minio
+from minio.error import S3Error
 
 try:
     # When running as a package (e.g., python -m summarizer.api)
@@ -80,6 +83,17 @@ class SummarizationService:
             client_kwargs["base_url"] = settings.openai_api_base.rstrip("/")
         self.client = AsyncOpenAI(**client_kwargs)
         self.db_manager = DatabaseManager(settings.database_url)
+        self.minio_bucket = settings.minio_bucket
+        self.minio_client = None
+        if settings.minio_endpoint and settings.minio_access_key:
+            secure = settings.minio_endpoint.startswith("https://")
+            endpoint = settings.minio_endpoint.replace("https://", "").replace("http://", "")
+            self.minio_client = Minio(
+                endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                secure=secure,
+            )
         
         # Prompt templates
         self.system_prompt = """You are a skilled local news summarizer. Your task is to create concise, accurate summaries of local news articles that help busy residents stay informed about their community.
@@ -377,6 +391,48 @@ app.mount(
     StaticFiles(directory=str((__file__).replace("api.py", "static"))),
     name="static",
 )
+
+
+@app.get("/articles/{article_id}/source")
+async def get_article_source(
+    article_id: int,
+    service: SummarizationService = Depends(get_service)
+):
+    """Stream the original article source file from MinIO."""
+    if not service.minio_client:
+        raise HTTPException(status_code=503, detail="MinIO client not configured")
+
+    article = await service.db_manager.get_article_by_id(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    source_path = article.get('source_url') or article.get('url') or article.get('source_file')
+    if not source_path:
+        raise HTTPException(status_code=404, detail="Article source not available")
+
+    try:
+        obj = await asyncio.to_thread(
+            service.minio_client.get_object,
+            service.minio_bucket,
+            source_path,
+        )
+    except S3Error as exc:
+        raise HTTPException(status_code=404, detail=f"Unable to fetch source: {exc}") from exc
+
+    def iterfile():
+        try:
+            for chunk in obj.stream(32 * 1024):
+                yield chunk
+        finally:
+            obj.close()
+            obj.release_conn()
+
+    is_pdf = source_path.lower().endswith(".pdf")
+    media_type = "application/pdf" if is_pdf else "text/html"
+    headers = {"Content-Disposition": f"inline; filename={Path(source_path).name}"}
+    if not is_pdf:
+        headers["Content-Type"] = "text/html; charset=utf-8"
+    return StreamingResponse(iterfile(), media_type=media_type, headers=headers)
 
 @app.get("/health")
 async def health_check():

@@ -131,7 +131,13 @@ data:
         const meta = document.createElement('div');
         meta.className = 'meta';
         const metaParts = [];
-        if (item.section) metaParts.push(item.section);
+        if (item.section && item.section !== 'General') metaParts.push(item.section);
+        if (item.page_number) {
+          metaParts.push(`Page ${item.page_number}`);
+        } else if (item.source_path) {
+          const slug = item.source_path.split('/').pop();
+          if (slug) metaParts.push(slug.replace(/_/g, ' '));
+        }
         const published = fmtDateTime(item.date_published);
         if (published) metaParts.push(`Published ${published}`);
         if (item.word_count) metaParts.push(`${item.word_count} words`);
@@ -295,7 +301,6 @@ data:
         setLastUpdated(null);
       }
     })();
-
   index.html: |
     <!doctype html>
     <html lang="en">
@@ -338,7 +343,6 @@ data:
         <script src="/static/app.js" defer></script>
       </body>
       </html>
-
   style.css: |
     :root{--bg:#0f172a;--panel:#111827;--text:#e5e7eb;--muted:#9ca3af;--accent:#3b82f6;--card:#0b1220;}
     *{box-sizing:border-box}
@@ -363,4 +367,3 @@ data:
     .empty-state{border:1px dashed #1f2937;border-radius:12px;padding:32px;text-align:center;color:var(--muted);background:rgba(17,24,39,.45)}
     .footer{max-width:980px;margin:16px auto 40px;padding:0 16px;color:var(--muted);display:flex;gap:12px;justify-content:space-between;align-items:center}
     .footer a{color:var(--muted)}
-

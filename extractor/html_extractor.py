@@ -220,8 +220,10 @@ class HTMLExtractor:
             if data.get('tags'):
                 tags.extend(data['tags'])
             
+            title = self._resolve_title(data.get('title'), content, source_url)
+
             return HTMLArticle(
-                title=data.get('title', 'Untitled').strip(),
+                title=title,
                 content=content,
                 url=source_url,
                 date_published=date_published,
@@ -276,7 +278,7 @@ class HTMLExtractor:
     def _filter_unique_elements(self, elements: List) -> List:
         """Filter out nested/duplicate elements."""
         unique_elements = []
-        
+
         for element in elements:
             # Check if this element is contained within any other element
             is_nested = False
@@ -287,21 +289,45 @@ class HTMLExtractor:
             
             if not is_nested:
                 unique_elements.append(element)
-        
+
         return unique_elements
+
+    def _resolve_title(self, raw_title: Optional[str], content: str, source_url: Optional[str]) -> str:
+        title = (raw_title or "").strip()
+        if title and not title.lower().startswith("untitled"):
+            return title[:200]
+
+        for line in content.split('\n'):
+            line = line.strip()
+            if len(line.split()) >= 3:
+                snippet = line[:200]
+                return snippet + ("..." if len(line) > len(snippet) else "")
+
+        if source_url:
+            parsed = urlparse(source_url)
+            path = parsed.path or source_url
+            name = Path(path).name or path
+            match = re.search(r"page_(\d+)", name, re.IGNORECASE)
+            if match:
+                return f"Page {int(match.group(1))}"
+            pretty = name.replace('_', ' ').replace('-', ' ').strip()
+            if pretty:
+                return pretty.title()[:200]
+
+        return "Untitled Article"
     
     def _extract_article_from_element(self, element, source_url: Optional[str]) -> Optional[HTMLArticle]:
         """Extract article data from a BeautifulSoup element."""
         try:
             # Extract title
-            title = self._extract_title_from_element(element)
-            if not title:
-                return None
+            raw_title = self._extract_title_from_element(element)
             
             # Extract content text
             content = self._extract_content_from_element(element)
             if not content or len(content.split()) < self.min_article_words:
                 return None
+            
+            title = self._resolve_title(raw_title, content, source_url)
             
             # Extract metadata
             author = self._extract_author_from_element(element)
