@@ -272,15 +272,25 @@ class DatabaseManager:
                     if existing_id:
                         duplicate_count += 1
                         logger.debug(f"Duplicate article found: {stored_article.title[:50]}...")
+                        await self.store_article_events(
+                            conn,
+                            existing_id,
+                            stored_article.event_dates or [],
+                        )
+                        await conn.execute(
+                            "UPDATE articles SET event_dates = $1 WHERE id = $2",
+                            json.dumps(stored_article.event_dates) if stored_article.event_dates else None,
+                            existing_id,
+                        )
                         continue
-                    
+
                     # Insert new article
                     article_id = await self._insert_article(conn, stored_article)
                     if stored_article.event_dates:
                         await self.store_article_events(conn, article_id, stored_article.event_dates)
                     new_count += 1
                     logger.debug(f"Stored new article (ID {article_id}): {stored_article.title[:50]}...")
-                
+
                 # Record processing history
                 processing_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
                 await self._record_processing_history(

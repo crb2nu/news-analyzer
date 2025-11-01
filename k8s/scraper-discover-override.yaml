@@ -41,9 +41,9 @@ data:
     ]
     PUBLICATION_SLUGS = {
         "smyth_county": "Smyth County News & Messenger",
-        "news_press": "The News & Press",
+        "richlands": "The News & Press",
         "bland_county": "The Bland County Messenger",
-        "floyd_press": "The Floyd Press",
+        "floyd": "The Floyd Press",
         "wytheville": "Wytheville Enterprise",
         "washington_county": "Washington County News",
     }
@@ -630,11 +630,34 @@ data:
                         break
     
         def _select_publication(self, page: Page, publication_name: str) -> bool:
+            slug = None
+            for candidate_slug, display in PUBLICATION_SLUGS.items():
+                if display.lower() == (publication_name or "").lower():
+                    slug = candidate_slug
+                    break
+    
+            if slug:
+                target_url = urljoin("https://swvatoday.com", f"/eedition/{slug}/")
+                try:
+                    logger.debug("Attempting direct navigation for publication '%s' via slug '%s'", publication_name, slug)
+                    if not page.url.startswith(target_url):
+                        page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                        page.wait_for_timeout(1000)
+                    logger.info("Switched to publication '%s' via direct navigation (%s)", publication_name, target_url)
+                    return True
+                except Exception as exc:  # fall back to interactive selectors
+                    logger.debug("Direct navigation to %s failed: %s", target_url, exc)
+            else:
+                logger.debug("No slug mapping found for publication '%s'", publication_name)
+    
+            # Fallback: attempt to click visible tab/link
             selectors = [
                 f"a:has-text('{publication_name}')",
                 f"button:has-text('{publication_name}')",
                 f"[role='tab']:has-text('{publication_name}')",
                 f"[data-publication-name*='{publication_name}']",
+                "ul.list-inline li a[href*='/eedition']",
             ]
             for selector in selectors:
                 with suppress(Exception):
@@ -643,6 +666,7 @@ data:
                         tab.click()
                         page.wait_for_load_state("networkidle", timeout=15000)
                         page.wait_for_timeout(500)
+                        logger.info("Switched to publication '%s' via interactive selector '%s'", publication_name, selector)
                         return True
             return False
     
