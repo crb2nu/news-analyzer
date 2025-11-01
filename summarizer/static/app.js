@@ -264,14 +264,15 @@ function render(items, context, query) {
       summary.appendChild(kp);
     }
 
-    if (item.events && item.events.length) {
+    const evs = (item.events || []).filter((e) => e && e.start_time);
+    if (evs.length) {
       const inline = document.createElement('div');
       inline.className = 'event-inline';
       const label = document.createElement('strong');
       label.textContent = 'Events';
       inline.appendChild(label);
       const list = document.createElement('ul');
-      item.events.slice(0, 3).forEach((ev) => {
+      evs.slice(0, 3).forEach((ev) => {
         const li = document.createElement('li');
         const parts = [];
         if (ev.start_time) parts.push(new Date(ev.start_time).toLocaleString());

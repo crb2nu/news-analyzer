@@ -319,9 +319,9 @@ class DatabaseManager:
             a.location_name,
             a.location_lat,
             a.location_lon,
-            a.event_dates,
             a.content,
-            COALESCE(s.summary_text, '') AS summary_text
+            COALESCE(s.summary_text, '') AS summary_text,
+            COALESCE(ev.events, '[]') AS events
         FROM articles a
         LEFT JOIN LATERAL (
             SELECT summary_text
@@ -330,6 +330,25 @@ class DatabaseManager:
             ORDER BY s.date_created DESC
             LIMIT 1
         ) s ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT json_agg(
+                       json_build_object(
+                           'id', e.id,
+                           'title', e.title,
+                           'start_time', e.start_time,
+                           'end_time', e.end_time,
+                           'location_name', e.location_name
+                       )
+                       ORDER BY e.start_time NULLS LAST, e.id
+                   ) AS events
+            FROM (
+                SELECT id, title, start_time, end_time, location_name
+                FROM article_events
+                WHERE article_id = a.id
+                ORDER BY start_time NULLS LAST, id
+                LIMIT 3
+            ) e
+        ) ev ON TRUE
         WHERE {' AND '.join(filters)}
         ORDER BY COALESCE(a.date_published, a.date_extracted) DESC, a.id DESC
         LIMIT ${len(params)}
@@ -352,12 +371,12 @@ class DatabaseManager:
                 section_numeric = section.replace(' ', '').isdigit()
                 section = section if section and not section_numeric else 'General'
 
-                event_dates = row['event_dates']
-                if isinstance(event_dates, str):
-                    try:
-                        event_dates = json.loads(event_dates)
-                    except json.JSONDecodeError:
-                        event_dates = []
+                # Parse normalized events from JSON
+                row_events = []
+                try:
+                    row_events = json.loads(row['events']) if row['events'] else []
+                except Exception:
+                    row_events = []
 
                 results.append({
                     'id': row['id'],
@@ -372,7 +391,7 @@ class DatabaseManager:
                     'location_name': row['location_name'],
                     'location_lat': row['location_lat'],
                     'location_lon': row['location_lon'],
-                    'events': event_dates if event_dates else [],
+                    'events': row_events,
                 })
             return results
 
