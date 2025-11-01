@@ -33,6 +33,7 @@ spec:
             - /bin/sh
             - -c
             - |
+              chmod 755 /home/scraper
               DATE=$(date +%Y-%m-%d)
               python -m scraper.downloader --date $DATE --storage /app/storage/storage_state.json
             env:
@@ -103,16 +104,22 @@ spec:
             - name: scraper-login-override
               mountPath: /app/scraper/login.py
               subPath: login.py
+            - name: scraper-discover-override
+              mountPath: /app/scraper/discover.py
+              subPath: discover.py
           volumes:
           - name: session-storage
             emptyDir: {}
           - name: scraper-login-override
             configMap:
               name: scraper-login-override
+          - name: scraper-discover-override
+            configMap:
+              name: scraper-discover-override
           securityContext:
             runAsNonRoot: true
-            runAsUser: 995
-            fsGroup: 995
+            runAsUser: 1000
+            fsGroup: 1000
 ---
 ## PVC removed to stay within namespace quota; using emptyDir for session storage.
 ---
@@ -147,12 +154,11 @@ spec:
             image: registry.harbor.lan/library/news-analyzer-scraper:latest
             imagePullPolicy: Always
             command:
-            - python
-            - -m
-            - scraper.login
-            args:
-            - --storage
-            - /app/storage/storage_state.json
+            - /bin/sh
+            - -c
+            - |
+              chmod 755 /home/scraper
+              python -m scraper.login --storage /app/storage/storage_state.json
             env:
             - name: HOME
               value: /home/scraper
@@ -196,13 +202,19 @@ spec:
             - name: scraper-login-override
               mountPath: /app/scraper/login.py
               subPath: login.py
+            - name: scraper-discover-override
+              mountPath: /app/scraper/discover.py
+              subPath: discover.py
           volumes:
           - name: session-storage
             emptyDir: {}
           - name: scraper-login-override
             configMap:
               name: scraper-login-override
+          - name: scraper-discover-override
+            configMap:
+              name: scraper-discover-override
           securityContext:
             runAsNonRoot: true
-            runAsUser: 995
-            fsGroup: 995
+            runAsUser: 1000
+            fsGroup: 1000

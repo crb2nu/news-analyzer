@@ -95,8 +95,8 @@ class EditionDiscoverer:
                 # Navigate to the e-edition homepage
                 base_url = "https://swvatoday.com/eedition/smyth_county/"
                 logger.info(f"Navigating to {base_url}")
-                page.goto(base_url, timeout=30000)
-                page.wait_for_load_state("networkidle", timeout=15000)
+                page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2000)
                 
                 # Check if we need to navigate to a specific date
                 edition = self._discover_edition_pages(page, target_date, base_url)
@@ -127,8 +127,7 @@ class EditionDiscoverer:
                     logger.warning(f"Could not navigate to date {target_date}, using current edition")
             
             # Wait for the edition to load
-            page.wait_for_load_state("networkidle", timeout=15000)
-            page.wait_for_timeout(2000)  # Give time for dynamic content
+            page.wait_for_timeout(2000)
 
             # Method 0: Parse the index list of "Page A1" style links
             pages = self._collect_index_page_links(page, base_url)

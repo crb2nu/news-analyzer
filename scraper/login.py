@@ -386,8 +386,8 @@ def verify_session(storage_path: Path = Path("storage_state.json")) -> bool:
             page = context.new_page()
             
             # Try to access a protected page
-            page.goto("https://swvatoday.com/eedition/smyth_county/", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=10000)
+            page.goto("https://swvatoday.com/eedition/smyth_county/", timeout=60000)
+            page.wait_for_load_state("networkidle", timeout=30000)
             
             # Check if we're redirected to login (session expired)
             if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():

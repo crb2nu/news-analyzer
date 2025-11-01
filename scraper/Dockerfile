@@ -118,14 +118,18 @@ COPY --from=base /app/.venv /app/.venv
 # Copy Playwright browsers from base stage
 COPY --from=base /root/.cache/ms-playwright /home/scraper/.cache/ms-playwright
 
+# Ensure browser binaries are in sync with the current Playwright version
+RUN /app/.venv/bin/playwright install chromium firefox
+
 # Copy application code into a package directory
 COPY . /app/scraper
 
 # Create storage directory for session state
 RUN mkdir -p /app/storage
 
-# Set proper permissions
-RUN chown -R scraper:scraper /app /home/scraper
+# Set proper permissions (allow K8s runAsUser override to traverse home dir)
+RUN chown -R scraper:scraper /app /home/scraper \
+    && chmod 755 /home/scraper
 
 USER scraper
 
