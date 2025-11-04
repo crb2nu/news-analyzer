@@ -85,20 +85,7 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 5
-        volumeMounts:
-        - name: summarizer-static-override
-          mountPath: /app/static/index.html
-          subPath: index.html
-        - name: summarizer-static-override
-          mountPath: /app/static/app.js
-          subPath: app.js
-        - name: summarizer-static-override
-          mountPath: /app/static/style.css
-          subPath: style.css
-      volumes:
-      - name: summarizer-static-override
-        configMap:
-          name: summarizer-static-override
+      volumes: []
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

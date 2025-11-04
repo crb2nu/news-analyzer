@@ -24,22 +24,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DEFAULT_PUBLICATION = "Smyth County News & Messenger"
-PUBLICATION_TABS = [
-    "Smyth County News & Messenger",
-    "The News & Press",
-    "The Bland County Messenger",
-    "The Floyd Press",
-    "Wytheville Enterprise",
-    "Washington County News",
-]
 PUBLICATION_SLUGS = {
-    "smyth_county": "Smyth County News & Messenger",
-    "richlands": "The News & Press",
-    "bland_county": "The Bland County Messenger",
-    "floyd": "The Floyd Press",
-    "wytheville": "Wytheville Enterprise",
-    "washington_county": "Washington County News",
+    "Smyth County News & Messenger": "smyth_county",
+    "The News & Press": "richlands",
+    "The Bland County Messenger": "bland_county",
+    "The Floyd Press": "floyd",
+    "Wytheville Enterprise": "wytheville",
+    "Washington County News": "washington_county",
 }
+PUBLICATION_SLUG_TO_DISPLAY = {slug: name for name, slug in PUBLICATION_SLUGS.items()}
+PUBLICATION_TABS = list(PUBLICATION_SLUGS.keys())
 
 
 @dataclass
@@ -137,7 +131,14 @@ class EditionDiscoverer:
                     selected_publication = publication
                     base_url = self._derive_base_url(page.url)
 
-                replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
+                index_url = self._find_edition_in_index(page, target_date, base_url)
+                replacement_page: Optional[Union[str, Page]] = None
+                if index_url:
+                    page.goto(index_url, timeout=60000, wait_until="domcontentloaded")
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                    base_url = self._derive_base_url(page.url)
+                else:
+                    replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
                 if isinstance(replacement_page, Page):
                     page = replacement_page
                     base_url = self._derive_base_url(page.url)
@@ -473,6 +474,49 @@ class EditionDiscoverer:
             logger.error(f"Edition search failed: {exc}")
             return None
 
+    def _find_edition_in_index(self, page: Page, target_date: date, base_url: str) -> Optional[str]:
+        """Scan the edition index cards for the exact target date and return its URL."""
+        try:
+            cards = page.locator("article.tnt-asset-type-edition")
+            count = min(cards.count(), 40)
+            if count == 0:
+                return None
+
+            for idx in range(count):
+                card = cards.nth(idx)
+                time_el = card.locator("time[datetime]").first
+                edition_date = None
+                if time_el.count():
+                    dt_attr = time_el.get_attribute("datetime")
+                    edition_date = self._parse_date_value(dt_attr)
+                    if not edition_date:
+                        try:
+                            edition_date = self._parse_date_value(time_el.inner_text())
+                        except Exception:
+                            edition_date = None
+                else:
+                    try:
+                        text = card.inner_text()
+                        edition_date = self._parse_date_value(text)
+                    except Exception:
+                        edition_date = None
+
+                if edition_date != target_date:
+                    continue
+
+                link = card.locator("a.tnt-asset-link").first
+                if link.count():
+                    href = link.get_attribute("href")
+                    normalized = self._normalize_url(base_url, href)
+                    if normalized:
+                        logger.info("Found edition for %s on %s via index", target_date, normalized)
+                        return normalized
+
+            return None
+        except Exception as exc:
+            logger.debug("Edition index scan failed: %s", exc)
+            return None
+
     def _navigate_to_date(self, page, target_date: date) -> bool:
         """
         Navigate to a specific date in the PageSuite e-edition.
@@ -623,11 +667,13 @@ class EditionDiscoverer:
                     break
 
     def _select_publication(self, page: Page, publication_name: str) -> bool:
-        slug = None
-        for candidate_slug, display in PUBLICATION_SLUGS.items():
-            if display.lower() == (publication_name or "").lower():
-                slug = candidate_slug
-                break
+        normalized_name = (publication_name or "").strip()
+        slug = PUBLICATION_SLUGS.get(normalized_name)
+        if not slug:
+            for display_name, candidate_slug in PUBLICATION_SLUGS.items():
+                if display_name.lower() == normalized_name.lower():
+                    slug = candidate_slug
+                    break
 
         if slug:
             target_url = urljoin("https://swvatoday.com", f"/eedition/{slug}/")
@@ -778,9 +824,12 @@ class EditionDiscoverer:
             return None
         parts = [part for part in parsed.path.split('/') if part]
         for part in reversed(parts):
-            slug = part.lower().replace('-', '_')
-            if slug in PUBLICATION_SLUGS:
-                return PUBLICATION_SLUGS[slug]
+            slug = part.lower()
+            slug_alt = slug.replace('-', '_')
+            if slug in PUBLICATION_SLUG_TO_DISPLAY:
+                return PUBLICATION_SLUG_TO_DISPLAY[slug]
+            if slug_alt in PUBLICATION_SLUG_TO_DISPLAY:
+                return PUBLICATION_SLUG_TO_DISPLAY[slug_alt]
         return None
 
     def _normalize_url(self, base_url: str, href: Optional[str]) -> Optional[str]:
@@ -802,7 +851,28 @@ class EditionDiscoverer:
             return f"https://swvatoday.com{href}"
 
         return urljoin(base_url, href)
-    
+
+    def _parse_date_value(self, value: Optional[str]) -> Optional[date]:
+        if not value:
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        cleaned = text.replace("Z", "")
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(cleaned, fmt)
+                return dt.date()
+            except ValueError:
+                continue
+        for fmt in ("%b %d, %Y", "%B %d, %Y"):
+            try:
+                dt = datetime.strptime(text, fmt)
+                return dt.date()
+            except ValueError:
+                continue
+        return None
+
     def _extract_page_number(self, text: str, url: str, fallback: int) -> int:
         """Extract page number from text or URL"""
         # Look for patterns like "Page 1", "P1", or numbers in URL

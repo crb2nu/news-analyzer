@@ -13,7 +13,7 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-E_EDITION_URL = "https://swvatoday.com/eedition/smyth_county/"
+E_EDITION_URL = "https://swvatoday.com/eedition/"
 LOGIN_URL = f"https://swvatoday.com/users/login/?referer_url={quote_plus(E_EDITION_URL)}"
 LOCKOUT_LOCAL_FILENAME = ".login_lockout.json"
 
@@ -386,7 +386,7 @@ def verify_session(storage_path: Path = Path("storage_state.json")) -> bool:
             page = context.new_page()
             
             # Try to access a protected page
-            page.goto("https://swvatoday.com/eedition/smyth_county/", timeout=60000)
+            page.goto(E_EDITION_URL, timeout=60000)
             page.wait_for_load_state("networkidle", timeout=30000)
             
             # Check if we're redirected to login (session expired)

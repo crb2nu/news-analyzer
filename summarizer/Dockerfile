@@ -22,5 +22,5 @@ RUN poetry config virtualenvs.create false \
 COPY . .
 
 # Run the application
-# Run the FastAPI app by default
+# Run the FastAPI app by default (module is at top-level in this image)
 CMD ["python", "-m", "api"]

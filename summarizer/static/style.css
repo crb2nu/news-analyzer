@@ -11,6 +11,7 @@ body{margin:0;font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Ubuntu
 .view-toggle button.active{background:var(--accent);color:#0b1020;box-shadow:0 8px 20px -6px rgba(59,130,246,.7)}
 .controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 label{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:14px}
+.toggle{gap:8px}
 .search-group{display:flex;gap:6px;align-items:center}
 select,input[type="search"]{background:rgba(11,18,32,.85);color:var(--text);border:1px solid rgba(148,163,184,.25);border-radius:8px;padding:7px 10px;min-width:140px}
 button{background:var(--accent);border:0;color:white;padding:8px 14px;border-radius:8px;cursor:pointer;transition:transform .1s ease,filter .2s}
@@ -19,6 +20,9 @@ button:hover{filter:brightness(1.1)}
 .controls button.secondary{background:rgba(148,163,184,.2);color:var(--text)}
 .main{max-width:1020px;margin:24px auto 32px;padding:0 18px}
 .feed{display:grid;gap:16px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 -4px}
+.chip{background:rgba(148,163,184,.18);border:1px solid rgba(148,163,184,.3);color:var(--text);padding:6px 10px;border-radius:999px;font-size:13px;cursor:pointer;user-select:none}
+.chip.active{background:var(--accent);color:#0b1020;border-color:transparent}
 .card{background:radial-gradient(1200px 400px at 0% -40%,rgba(59,130,246,.25),transparent 40%),var(--card);border:1px solid #152033;border-radius:12px;padding:14px 16px}
 .card h2{margin:0 0 8px 0;font-size:20px}
 .meta{color:var(--muted);font-size:13px;margin-bottom:8px;display:flex;gap:10px;flex-wrap:wrap}

@@ -7,17 +7,42 @@ const sectionSelect = $('#sectionSelect');
 const searchInput = $('#search');
 const clearSearchBtn = $('#clearSearchBtn');
 const refreshBtn = $('#refreshBtn');
+const eventsOnlyToggle = $('#eventsOnlyToggle');
+const sectionChips = $('#sectionChips');
 const eventsPanel = $('#eventsPanel');
 const eventsList = $('#eventsList');
 const feedTab = $('#feedTab');
 const eventsTab = $('#eventsTab');
 
-const PREF_KEY = 'news-analyzer-feed-v1';
+const PREF_KEY = 'news-analyzer-feed-v2';
 const feedCache = new Map();
 const eventsCache = { data: null, lastFetched: null };
 let prefs = loadPrefs();
 let suppressSectionChange = false;
 let activeView = 'feed';
+
+// Section normalization (improves categorization UX)
+const SECTION_ALIASES = new Map([
+  ['obituary', 'Obituaries'],
+  ['obituaries', 'Obituaries'],
+  ['obits', 'Obituaries'],
+  ['sports', 'Sports'],
+  ['news', 'News'],
+  ['local', 'Local'],
+  ['business', 'Business'],
+  ['opinion', 'Opinion'],
+  ['editorial', 'Opinion'],
+  ['police', 'Public Safety'],
+  ['police and courts', 'Public Safety'],
+  ['crime', 'Public Safety'],
+  ['classifieds', 'Classifieds'],
+]);
+
+function normalizeSection(s) {
+  if (!s) return 'General';
+  const key = String(s).trim().toLowerCase();
+  return SECTION_ALIASES.get(key) || s.replace(/\s+/g, ' ').trim();
+}
 
 function loadPrefs() {
   try {
@@ -54,6 +79,7 @@ function setLastUpdated(ts = null) {
 function switchView(view) {
   if (view === activeView) return;
   activeView = view;
+  savePrefs({ view });
   if (view === 'feed') {
     feedEl.hidden = false;
     eventsPanel.hidden = true;
@@ -289,10 +315,15 @@ function render(items, context, query) {
   }
 }
 
-function filterItems(items, { section, query }) {
+function filterItems(items, { section, query, eventsOnly }) {
   return items.filter((item) => {
-    const matchesSection = !section || item.section === section;
+    const itemSection = normalizeSection(item.section);
+    const matchesSection = !section || normalizeSection(section) === itemSection;
     if (!matchesSection) return false;
+    if (eventsOnly) {
+      const evs = (item.events || []).filter((e) => e && (e.start_time || e.title));
+      if (!evs.length) return false;
+    }
     if (!query) return true;
     const haystack = `${item.title}\n${item.summary}\n${item.location_name || ''}`.toLowerCase();
     return haystack.includes(query.toLowerCase());
@@ -302,7 +333,7 @@ function filterItems(items, { section, query }) {
 function updateSectionOptions(items) {
   const counts = new Map();
   items.forEach((item) => {
-    const key = (item.section || 'General').trim();
+    const key = normalizeSection(item.section || 'General');
     counts.set(key, (counts.get(key) || 0) + 1);
   });
 
@@ -315,9 +346,9 @@ function updateSectionOptions(items) {
   allOpt.textContent = `All sections (${items.length})`;
   sectionSelect.appendChild(allOpt);
 
-  [...counts.entries()]
+  const sorted = [...counts.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .forEach(([name, count]) => {
+  sorted.forEach(([name, count]) => {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = `${name} (${count})`;
@@ -331,6 +362,25 @@ function updateSectionOptions(items) {
   }
   suppressSectionChange = false;
   savePrefs({ section: sectionSelect.value });
+
+  // Render section chips as quick filters (top 8 by count)
+  if (sectionChips) {
+    sectionChips.innerHTML = '';
+    const top = sorted.sort((a, b) => b[1] - a[1]).slice(0, 8);
+    top.forEach(([name, count]) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip' + (sectionSelect.value === name ? ' active' : '');
+      chip.textContent = `${name} (${count})`;
+      chip.setAttribute('data-section', name);
+      chip.addEventListener('click', () => {
+        sectionSelect.value = name;
+        savePrefs({ section: name });
+        loadFeed({ forceRefresh: false });
+      });
+      sectionChips.appendChild(chip);
+    });
+  }
 }
 
 async function fetchDateFeed(date, { forceRefresh = false } = {}) {
@@ -349,13 +399,14 @@ async function loadFeed({ forceRefresh = false } = {}) {
 
   const query = searchInput.value.trim();
   const section = sectionSelect.value;
+  const eventsOnly = !!(eventsOnlyToggle && eventsOnlyToggle.checked);
   const isCached = !forceRefresh && feedCache.has(date);
   setStatus(isCached ? 'Applying filters…' : 'Loading feed…');
   try {
     const data = await fetchDateFeed(date, { forceRefresh });
     updateSectionOptions(data.items ?? []);
 
-    const filtered = filterItems(data.items ?? [], { section, query });
+    const filtered = filterItems(data.items ?? [], { section, query, eventsOnly });
     render(filtered, { date: data.date || date }, query);
 
     const totalCount = data.items ? data.items.length : 0;
@@ -366,7 +417,8 @@ async function loadFeed({ forceRefresh = false } = {}) {
       setStatus(base);
     }
     setLastUpdated(Date.now());
-    savePrefs({ date, section, search: query });
+    savePrefs({ date, section, search: query, eventsOnly });
+    updateURL({ date, section, q: query, view: activeView, eventsOnly });
   } catch (e) {
     setStatus(`Error loading feed: ${e.message}`);
     setLastUpdated(null);
@@ -403,13 +455,55 @@ clearSearchBtn.addEventListener('click', () => {
 
 if (feedTab) feedTab.addEventListener('click', () => switchView('feed'));
 if (eventsTab) eventsTab.addEventListener('click', () => switchView('events'));
+if (eventsOnlyToggle) eventsOnlyToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
+
+// URL state helpers for shareable filters
+function readURL() {
+  const p = new URLSearchParams(location.search);
+  return {
+    date: p.get('date') || undefined,
+    section: p.get('section') || undefined,
+    q: p.get('q') || undefined,
+    view: p.get('view') || undefined,
+    eventsOnly: p.get('eventsOnly') === '1' ? true : undefined,
+  };
+}
+
+function updateURL({ date, section, q, view, eventsOnly }) {
+  const p = new URLSearchParams();
+  if (date) p.set('date', date);
+  if (section) p.set('section', section);
+  if (q) p.set('q', q);
+  if (view && view !== 'feed') p.set('view', view);
+  if (eventsOnly) p.set('eventsOnly', '1');
+  const qs = p.toString();
+  const next = qs ? `?${qs}` : location.pathname;
+  history.replaceState(null, '', next);
+}
 
 (async () => {
   try {
+    const urlState = readURL();
     await loadDates();
-    if (prefs.search) {
-      searchInput.value = prefs.search;
+
+    // Initialize from URL, then prefs
+    const initDate = urlState.date || prefs.date;
+    if (initDate) dateSelect.value = initDate;
+
+    const initSection = urlState.section || prefs.section;
+    if (initSection) sectionSelect.value = initSection;
+
+    const initSearch = urlState.q || prefs.search;
+    if (initSearch) searchInput.value = initSearch;
+
+    const initView = urlState.view || prefs.view;
+    if (initView) activeView = initView;
+
+    const initEventsOnly = urlState.eventsOnly ?? prefs.eventsOnly;
+    if (eventsOnlyToggle && typeof initEventsOnly === 'boolean') {
+      eventsOnlyToggle.checked = initEventsOnly;
     }
+
     await loadFeed();
     switchView(activeView);
   } catch (e) {
