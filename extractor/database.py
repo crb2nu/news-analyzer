@@ -25,10 +25,12 @@ try:
     from .pdf_extractor import Article as PDFArticle
     from .html_extractor import HTMLArticle
     from .event_parser import extract_events
+    from .normalize import normalize_section
 except Exception:
     from pdf_extractor import Article as PDFArticle
     from html_extractor import HTMLArticle
     from event_parser import extract_events
+    from normalize import normalize_section
 
 logger = logging.getLogger(__name__)
 
@@ -492,7 +494,7 @@ class DatabaseManager:
                 source_file=source_identifier,
                 page_number=article.page_number,
                 column_number=article.column,
-                section=article.section,
+                section=normalize_section(article.section),
                 word_count=article.word_count,
                 date_published=article.date_published,
                 date_extracted=datetime.utcnow(),
@@ -516,7 +518,7 @@ class DatabaseManager:
                 url=article.url,
                 source_type='html',
                 source_url=source_identifier,
-                section=article.section,
+                section=normalize_section(article.section),
                 author=article.author,
                 tags=article.tags,
                 word_count=article.word_count,

@@ -13,6 +13,7 @@ const eventsPanel = $('#eventsPanel');
 const eventsList = $('#eventsList');
 const feedTab = $('#feedTab');
 const eventsTab = $('#eventsTab');
+const themeToggle = $('#themeToggle');
 
 const PREF_KEY = 'news-analyzer-feed-v2';
 const feedCache = new Map();
@@ -20,6 +21,7 @@ const eventsCache = { data: null, lastFetched: null };
 let prefs = loadPrefs();
 let suppressSectionChange = false;
 let activeView = 'feed';
+let theme = 'system';
 
 // Section normalization (improves categorization UX)
 const SECTION_ALIASES = new Map([
@@ -60,6 +62,19 @@ function savePrefs(next) {
   } catch (_) {
     /* ignore storage quota errors */
   }
+}
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'light') {
+    root.setAttribute('data-theme', 'light');
+  } else if (mode === 'dark') {
+    root.setAttribute('data-theme', 'dark');
+  } else {
+    root.removeAttribute('data-theme');
+  }
+  theme = mode;
+  if (themeToggle) themeToggle.textContent = mode === 'dark' ? '🌞' : '🌗';
 }
 
 function setStatus(msg = '') {
@@ -456,6 +471,11 @@ clearSearchBtn.addEventListener('click', () => {
 if (feedTab) feedTab.addEventListener('click', () => switchView('feed'));
 if (eventsTab) eventsTab.addEventListener('click', () => switchView('events'));
 if (eventsOnlyToggle) eventsOnlyToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
+if (themeToggle) themeToggle.addEventListener('click', () => {
+  const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
+  applyTheme(next);
+  savePrefs({ theme: next });
+});
 
 // URL state helpers for shareable filters
 function readURL() {
@@ -503,6 +523,9 @@ function updateURL({ date, section, q, view, eventsOnly }) {
     if (eventsOnlyToggle && typeof initEventsOnly === 'boolean') {
       eventsOnlyToggle.checked = initEventsOnly;
     }
+
+    // Theme: apply saved or system
+    applyTheme(prefs.theme || 'system');
 
     await loadFeed();
     switchView(activeView);
