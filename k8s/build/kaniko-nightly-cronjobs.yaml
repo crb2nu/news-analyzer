@@ -319,7 +319,7 @@ spec:
             - name: COMPONENT
               value: notifier
             - name: CONTEXT_DIR
-              value: notifier
+              value: .
             - name: DOCKERFILE
               value: notifier/Dockerfile
             - name: TAG

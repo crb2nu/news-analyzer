@@ -19,6 +19,7 @@ from typing import List, Dict, Optional, Union
 from dataclasses import dataclass
 import json
 from urllib.parse import urljoin, urlparse
+from .normalize import normalize_section
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,13 +63,25 @@ class EditionDiscoverer:
     def __init__(self, storage_path: Path = Path("storage_state.json")):
         self.settings = Settings()
         self.storage_path = storage_path
+        self._pw = None
+        self._browser = None
+        self._authed = False
         
     def ensure_authenticated(self) -> bool:
-        """Ensure we have a valid authenticated session"""
-        if not verify_session(self.storage_path):
-            logger.info("Session invalid, attempting login...")
-            return login(self.storage_path)
-        return True
+        """Ensure we have a valid authenticated session (single login per process).
+
+        We attempt a real verification once; after a successful login we reuse the
+        stored state for subsequent publications to avoid repeated logins.
+        """
+        if self._authed:
+            return True
+        if verify_session(self.storage_path):
+            self._authed = True
+            return True
+        logger.info("Session invalid, attempting login...")
+        ok = login(self.storage_path)
+        self._authed = bool(ok)
+        return ok
     
     def get_available_publications(self) -> List[str]:
         return PUBLICATION_TABS.copy()
@@ -95,12 +108,11 @@ class EditionDiscoverer:
         publication = publication or DEFAULT_PUBLICATION
         selected_publication = publication
         try:
-            with sync_playwright() as p:
-                # Get proxy configuration
+            # Launch/reuse a single browser per process to save memory
+            if self._pw is None or self._browser is None:
+                self._pw = sync_playwright().start()
                 proxy_config = self.settings.get_playwright_proxy()
-                
-                # Prefer Firefox in containers for stability
-                browser = p.firefox.launch(
+                self._browser = self._pw.firefox.launch(
                     headless=True,
                     proxy=proxy_config,
                     args=[
@@ -113,8 +125,22 @@ class EditionDiscoverer:
                         "--no-zygote",
                     ],
                 )
-                
-                context = browser.new_context(storage_state=str(self.storage_path))
+
+            context = self._browser.new_context(storage_state=str(self.storage_path))
+            # Reduce bandwidth and memory: block heavy resources
+            try:
+                def _route_handler(route, request):
+                    rtype = request.resource_type
+                    url = request.url
+                    if rtype in ("image", "media", "font"):
+                        return route.abort()
+                    # Skip common analytics/ads
+                    if any(s in url for s in ("googletagmanager", "doubleclick", "adservice", "analytics", "facebook")):
+                        return route.abort()
+                    return route.continue_()
+                context.route("**/*", _route_handler)
+            except Exception:
+                pass
                 page = context.new_page()
                 
                 # Navigate to the e-edition root (allows switching across publications)
@@ -160,7 +186,6 @@ class EditionDiscoverer:
 
                 edition = self._discover_edition_pages(page, target_date, base_url)
                 
-                browser.close()
                 if edition:
                     edition.publication = selected_publication
                 return edition
@@ -168,6 +193,18 @@ class EditionDiscoverer:
         except Exception as e:
             logger.error(f"Discovery failed: {str(e)}")
             return None
+
+    def close(self):
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._pw:
+                self._pw.stop()
+        except Exception:
+            pass
     
     def _discover_edition_pages(self, page, target_date: date, base_url: str) -> Optional[Edition]:
         """
@@ -526,8 +563,7 @@ class EditionDiscoverer:
         try:
             # Method 1: Look for a date picker or calendar
             date_picker = page.locator(
-                "input[type='date'], input[class*='date'], "
-                "[class*='calendar'], [class*='datepicker']"
+                "input[type='date'], input[name*='date' i], input[id*='date' i]"
             ).first
             
             if date_picker.count() > 0:
@@ -543,21 +579,21 @@ class EditionDiscoverer:
                 
                 if go_button.count() > 0:
                     go_button.click()
-                    page.wait_for_load_state("networkidle", timeout=10000)
+                    page.wait_for_load_state("networkidle", timeout=45000)
                     return True
             
             # Method 2: Look for date navigation links
             date_links = page.locator(f"a:has-text('{target_date.strftime('%B %d, %Y')}')").all()
             if date_links:
                 date_links[0].click()
-                page.wait_for_load_state("networkidle", timeout=10000)
+                page.wait_for_load_state("networkidle", timeout=45000)
                 return True
             
             # Method 3: URL-based navigation
             # Many PageSuite sites use date in URL
             date_url = f"{page.url}?date={target_date.strftime('%Y-%m-%d')}"
-            page.goto(date_url)
-            page.wait_for_load_state("networkidle", timeout=10000)
+            page.goto(date_url, timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_load_state("networkidle", timeout=45000)
             
             # Check if the date navigation worked
             # Look for date display on page
@@ -894,20 +930,20 @@ class EditionDiscoverer:
         return fallback
     
     def _extract_section(self, text: str, url: str) -> Optional[str]:
-        """Extract section name from text or URL"""
-        # Common section names
-        sections = [
+        """Extract and normalize a section name from text or URL."""
+        candidates = [
             "local", "sports", "opinion", "business", "obituaries",
-            "classifieds", "entertainment", "news", "editorial"
+            "classifieds", "entertainment", "news", "editorial",
+            "police", "police and courts", "crime",
         ]
-        
+
         text_lower = text.lower()
         url_lower = url.lower()
-        
-        for section in sections:
-            if section in text_lower or section in url_lower:
-                return section.title()
-        
+
+        for raw in candidates:
+            if raw in text_lower or raw in url_lower:
+                return normalize_section(raw)
+
         return None
     
     def _extract_total_pages(self, nav_text: str) -> Optional[int]:

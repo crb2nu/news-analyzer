@@ -243,6 +243,13 @@ scrape-range:
 	  "          value: \"$(if $(FORCE),1,0)\"" \
 	  "        - name: PUBLICATIONS" \
 	  "          value: \"$(PUBLICATIONS)\"" \
+	  "        resources:" \
+	  "          requests:" \
+	  "            memory: \"1Gi\"" \
+	  "            cpu: \"500m\"" \
+	  "          limits:" \
+	  "            memory: \"2Gi\"" \
+	  "            cpu: \"1\"" \
 	  "        command:" \
 	  "        - /bin/sh" \
 	  "        - -c" \

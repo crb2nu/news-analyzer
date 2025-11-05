@@ -295,10 +295,11 @@ function render(items, context, query) {
       summary.appendChild(p);
     }
 
-    if (item.url) {
+    {
       const kp = document.createElement('a');
       kp.className = 'kp';
-      kp.href = item.url;
+      const sourceHref = item.id ? `/articles/${item.id}/source` : (item.url || '#');
+      kp.href = sourceHref;
       kp.target = '_blank';
       kp.rel = 'noopener';
       kp.textContent = 'Read full article ↗';

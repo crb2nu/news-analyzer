@@ -13,6 +13,8 @@ import requests
 from urllib.parse import urlparse
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 # MinIO client
 from minio import Minio
@@ -308,56 +310,56 @@ class DownloadCache:
         
         logger.info(f"Starting download of {edition.total_pages} pages for {edition.date} ({getattr(edition, 'publication', DEFAULT_PUBLICATION)})")
         
-        for page in edition.pages:
-            try:
-                # Check if already cached
-                was_cached = self.is_cached(edition, page)
+        # Parallelized page downloads (IO-bound)
+        lock = Lock()
+        max_workers = max(1, getattr(self.settings, 'scraper_parallelism', 4))
 
-                content = self.download_page(edition, page, force_refresh)
-                
-                if content:
-                    results['successful_downloads'] += 1
-                    if was_cached and not force_refresh:
-                        results['cached_pages'] += 1
-                    
-                    results['downloaded_pages'].append({
-                        'page_number': page.page_number,
-                        'url': page.url,
-                        'section': page.section,
-                        'format': page.format,
-                        'size_bytes': len(content),
-                        'was_cached': was_cached and not force_refresh,
-                        'publication': getattr(edition, 'publication', DEFAULT_PUBLICATION),
-                    })
-                    
-                    logger.info(f"Page {page.page_number}: Success ({len(content)} bytes)")
-                else:
+        def _task(p: EditionPage):
+            try:
+                was_cached = self.is_cached(edition, p)
+                content = self.download_page(edition, p, force_refresh)
+                with lock:
+                    if content:
+                        results['successful_downloads'] += 1
+                        if was_cached and not force_refresh:
+                            results['cached_pages'] += 1
+                        results['downloaded_pages'].append({
+                            'page_number': p.page_number,
+                            'url': p.url,
+                            'section': p.section,
+                            'format': p.format,
+                            'size_bytes': len(content),
+                            'was_cached': was_cached and not force_refresh,
+                            'publication': getattr(edition, 'publication', DEFAULT_PUBLICATION),
+                        })
+                        logger.info(f"Page {p.page_number}: Success ({len(content)} bytes)")
+                    else:
+                        results['failed_downloads'] += 1
+                        results['failed_pages'].append({
+                            'page_number': p.page_number,
+                            'url': p.url,
+                            'error': 'Download failed'
+                        })
+                        logger.error(f"Page {p.page_number}: Failed")
+            except Exception as e:
+                with lock:
                     results['failed_downloads'] += 1
                     results['failed_pages'].append({
-                        'page_number': page.page_number,
-                        'url': page.url,
-                        'error': 'Download failed'
+                        'page_number': p.page_number,
+                        'url': p.url,
+                        'error': str(e)
                     })
-                    
-                    logger.error(f"Page {page.page_number}: Failed")
-                
-                # Small delay between downloads to be respectful
-                time.sleep(1)
-                
-            except Exception as e:
-                results['failed_downloads'] += 1
-                results['failed_pages'].append({
-                    'page_number': page.page_number,
-                    'url': page.url,
-                    'error': str(e)
-                })
-                
-                logger.error(f"Page {page.page_number}: Exception - {str(e)}")
+                logger.error(f"Page {p.page_number}: Exception - {str(e)}")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_task, p) for p in edition.pages]
+            for fut in as_completed(futures):
+                _ = fut.result() if fut else None
         
         results['end_time'] = datetime.utcnow().isoformat()
         results['success_rate'] = results['successful_downloads'] / edition.total_pages if edition.total_pages > 0 else 0
         
-        logger.info(f"Download complete: {results['successful_downloads']}/{edition.total_pages} successful")
+        logger.info(f"Download complete: {results['successful_downloads']}/{edition.total_pages} successful (parallelism={max_workers})")
         
         return results
     

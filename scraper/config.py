@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     minio_secret_key: str = "changeme-strong-secret-key"
     minio_bucket: str = "news-cache"
 
+    # Scraper performance tuning
+    scraper_parallelism: int = 4  # concurrent page downloads per edition
+
     # Login safety configuration
     lockout_cooldown_minutes: int = 30
     lockout_marker_key: str = "locks/login-lockout.json"
