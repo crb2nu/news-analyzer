@@ -27,6 +27,26 @@ spec:
             imagePullPolicy: Always
             command: ["python", "-m", "notifier.ntfy_notifier"]
             env:
+            - name: METRICS_LABEL_component
+              value: notifier
+            - name: METRICS_LABEL_namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: METRICS_LABEL_pod
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: METRICS_LABEL_node
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LOG_FORMAT
+              value: json
+            - name: METRICS_JOB_NAME
+              value: notifier
+            - name: METRICS_PUSHGATEWAY_URL
+              value: ""
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

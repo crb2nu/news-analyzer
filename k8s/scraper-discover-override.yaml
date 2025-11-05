@@ -75,13 +75,74 @@ data:
         def __init__(self, storage_path: Path = Path("storage_state.json")):
             self.settings = Settings()
             self.storage_path = storage_path
+            # Cache auth status within the process to avoid re-verifying and re-logging
+            # before each publication/date. Sessions are typically valid for hours.
+            self._auth_checked = False
+            self._auth_valid = False
+            self._auth_checked_at: Optional[datetime] = None
+            # Shared Playwright/browser/context reused across publications within a run
+            self._p = None
+            self._browser = None
+            self._context: Optional[BrowserContext] = None
+
+        def _ensure_playwright_context(self) -> BrowserContext:
+            if self._context is not None:
+                return self._context
+
+            proxy_config = self.settings.get_playwright_proxy()
+            # Start Playwright once
+            self._p = sync_playwright().start()
+            # Prefer Firefox in containers for stability
+            self._browser = self._p.firefox.launch(
+                headless=True,
+                proxy=proxy_config,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--single-process",
+                    "--no-zygote",
+                ],
+            )
+            self._context = self._browser.new_context(storage_state=str(self.storage_path))
+            return self._context
+
+        def close(self) -> None:
+            try:
+                if self._context is not None:
+                    self._context.close()
+            except Exception:
+                pass
+            try:
+                if self._browser is not None:
+                    self._browser.close()
+            except Exception:
+                pass
+            try:
+                if self._p is not None:
+                    self._p.stop()
+            except Exception:
+                pass
             
         def ensure_authenticated(self) -> bool:
             """Ensure we have a valid authenticated session"""
-            if not verify_session(self.storage_path):
-                logger.info("Session invalid, attempting login...")
-                return login(self.storage_path)
-            return True
+            # If we've recently verified a valid session, reuse it.
+            if self._auth_checked and self._auth_valid:
+                return True
+
+            is_valid = verify_session(self.storage_path)
+            self._auth_checked = True
+            self._auth_checked_at = datetime.utcnow()
+            if is_valid:
+                self._auth_valid = True
+                return True
+
+            logger.info("Session invalid, attempting login...")
+            ok = login(self.storage_path)
+            self._auth_valid = bool(ok)
+            return self._auth_valid
         
         def get_available_publications(self) -> List[str]:
             return PUBLICATION_TABS.copy()
@@ -108,68 +169,49 @@ data:
             publication = publication or DEFAULT_PUBLICATION
             selected_publication = publication
             try:
-                with sync_playwright() as p:
-                    # Get proxy configuration
-                    proxy_config = self.settings.get_playwright_proxy()
-                    
-                    # Prefer Firefox in containers for stability
-                    browser = p.firefox.launch(
-                        headless=True,
-                        proxy=proxy_config,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu",
-                            "--disable-software-rasterizer",
-                            "--single-process",
-                            "--no-zygote",
-                        ],
-                    )
-                    
-                    context = browser.new_context(storage_state=str(self.storage_path))
-                    page = context.new_page()
-                    
-                    # Navigate to the e-edition root (allows switching across publications)
-                    base_url = "https://swvatoday.com/eedition/"
-                    logger.info(f"Navigating to {base_url}")
-                    page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
-                    page.wait_for_timeout(2000)
-    
-                    self._dismiss_cookie_banner(page)
-                    if not self._select_publication(page, publication):
-                        logger.info("Could not select publication %s; staying on default", publication)
-                        selected_publication = DEFAULT_PUBLICATION
-                    else:
-                        selected_publication = publication
+                context = self._ensure_playwright_context()
+                page = context.new_page()
+
+                # Navigate to the e-edition root (allows switching across publications)
+                base_url = "https://swvatoday.com/eedition/"
+                logger.info(f"Navigating to {base_url}")
+                page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2000)
+
+                self._dismiss_cookie_banner(page)
+                if not self._select_publication(page, publication):
+                    logger.info("Could not select publication %s; staying on default", publication)
+                    selected_publication = DEFAULT_PUBLICATION
+                else:
+                    selected_publication = publication
+                    base_url = self._derive_base_url(page.url)
+
+                replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
+                if isinstance(replacement_page, Page):
+                    page = replacement_page
+                    base_url = self._derive_base_url(page.url)
+                elif isinstance(replacement_page, str):
+                    page.goto(replacement_page, timeout=60000, wait_until="domcontentloaded")
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                    base_url = self._derive_base_url(page.url)
+                else:
+                    # Fall back to in-viewer date navigation if search fails
+                    if not self._navigate_to_date(page, target_date):
+                        logger.warning(f"Could not navigate directly to {target_date}; attempting current edition")
                         base_url = self._derive_base_url(page.url)
-    
-                    replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
-                    if isinstance(replacement_page, Page):
-                        page = replacement_page
-                        base_url = self._derive_base_url(page.url)
-                    elif isinstance(replacement_page, str):
-                        page.goto(replacement_page, timeout=60000, wait_until="domcontentloaded")
-                        page.wait_for_load_state("networkidle", timeout=15000)
-                        base_url = self._derive_base_url(page.url)
-                    else:
-                        # Fall back to in-viewer date navigation if search fails
-                        if not self._navigate_to_date(page, target_date):
-                            logger.warning(f"Could not navigate directly to {target_date}; attempting current edition")
-                            base_url = self._derive_base_url(page.url)
-                    current_publication = selected_publication or self._infer_publication_from_url(page.url)
-                    if current_publication:
-                        selected_publication = current_publication
-    
-                    # Wait briefly for viewer content to settle
-                    page.wait_for_timeout(2000)
-    
-                    edition = self._discover_edition_pages(page, target_date, base_url)
-                    
-                    browser.close()
-                    if edition:
-                        edition.publication = selected_publication
-                    return edition
+                current_publication = selected_publication or self._infer_publication_from_url(page.url)
+                if current_publication:
+                    selected_publication = current_publication
+
+                # Wait briefly for viewer content to settle
+                page.wait_for_timeout(2000)
+
+                edition = self._discover_edition_pages(page, target_date, base_url)
+
+                page.close()
+                if edition:
+                    edition.publication = selected_publication
+                return edition
                     
             except Exception as e:
                 logger.error(f"Discovery failed: {str(e)}")
@@ -482,54 +524,67 @@ data:
     
         def _navigate_to_date(self, page, target_date: date) -> bool:
             """
-            Navigate to a specific date in the PageSuite e-edition.
-            
+            Navigate to a specific date in the e-edition while avoiding site-wide
+            date inputs (e.g., events calendar). We scope selectors to likely
+            e-edition containers and fall back conservatively.
+
             Returns True if navigation was successful, False otherwise.
             """
             try:
-                # Method 1: Look for a date picker or calendar
-                date_picker = page.locator(
-                    "input[type='date'], input[class*='date'], "
-                    "[class*='calendar'], [class*='datepicker']"
-                ).first
-                
-                if date_picker.count() > 0:
-                    # Format date for input
-                    date_str = target_date.strftime("%Y-%m-%d")
-                    date_picker.fill(date_str)
-                    
-                    # Look for a submit/go button
-                    go_button = page.locator(
-                        "button[type='submit'], button:has-text('Go'), "
-                        "button:has-text('View'), button:has-text('Load')"
+                # Candidate containers that usually wrap the e-edition UI
+                containers = [
+                    "section:has(a[href*='/eedition/'])",
+                    "main:has(a[href*='/eedition/'])",
+                    "div[id*='eedition' i]",
+                    "div[class*='eedition' i]",
+                    "div[class*='pagesuite' i]",
+                ]
+
+                date_str_iso = target_date.strftime("%Y-%m-%d")
+                date_str_long = target_date.strftime("%B %d, %Y")
+
+                # Method 1: Scoped date input within e-edition containers
+                for scope in containers:
+                    scoped = page.locator(
+                        f"{scope} input[type='date'], {scope} input[class*='date' i]"
                     ).first
-                    
-                    if go_button.count() > 0:
-                        go_button.click()
+                    if scoped.count() > 0:
+                        # Ensure it is actually interactable
+                        with suppress(Exception):
+                            scoped.wait_for(state="visible", timeout=1500)
+                            scoped.fill(date_str_iso)
+                            # Click a nearby Go/View button if present in same scope
+                            go_btn = page.locator(
+                                f"{scope} button[type='submit'], {scope} button:has-text('Go'),"
+                                f"{scope} button:has-text('View'), {scope} button:has-text('Load')"
+                            ).first
+                            if go_btn.count() > 0:
+                                go_btn.click()
                         page.wait_for_load_state("networkidle", timeout=10000)
                         return True
-                
-                # Method 2: Look for date navigation links
-                date_links = page.locator(f"a:has-text('{target_date.strftime('%B %d, %Y')}')").all()
-                if date_links:
-                    date_links[0].click()
+
+                # Method 2: Use the e-edition search panel (if present)
+                # Let higher-level _open_edition_from_search handle most of this,
+                # but attempt a lightweight link click if results are already visible.
+                result_link = page.locator(
+                    f"a[href*='/eedition/']:has-text('{date_str_long}')"
+                ).first
+                if result_link.count() > 0:
+                    with suppress(Exception):
+                        result_link.click()
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                        return True
+
+                # Method 3: URL parameter fallback (best-effort)
+                date_url = f"{self._derive_base_url(page.url)}?date={date_str_iso}"
+                with suppress(Exception):
+                    page.goto(date_url)
                     page.wait_for_load_state("networkidle", timeout=10000)
-                    return True
-                
-                # Method 3: URL-based navigation
-                # Many PageSuite sites use date in URL
-                date_url = f"{page.url}?date={target_date.strftime('%Y-%m-%d')}"
-                page.goto(date_url)
-                page.wait_for_load_state("networkidle", timeout=10000)
-                
-                # Check if the date navigation worked
-                # Look for date display on page
-                date_display = page.locator(f"*:has-text('{target_date.strftime('%B %d, %Y')}')").first
-                if date_display.count() > 0:
-                    return True
-                
+                    if page.locator(f"*:has-text('{date_str_long}')").first.count() > 0:
+                        return True
+
                 return False
-                
+
             except Exception as e:
                 logger.error(f"Date navigation failed: {str(e)}")
                 return False
@@ -651,14 +706,20 @@ data:
             else:
                 logger.debug("No slug mapping found for publication '%s'", publication_name)
     
-            # Fallback: attempt to click visible tab/link
-            selectors = [
+            # Fallback: attempt to click a publication link on the page.
+            # Prefer slug-specific anchors to avoid jumping to the wrong paper.
+            selectors = []
+            if slug:
+                selectors.extend([
+                    f"a[href*='/eedition/{slug}/']",
+                    f"a[href$='/eedition/{slug}/']",
+                ])
+            selectors.extend([
                 f"a:has-text('{publication_name}')",
                 f"button:has-text('{publication_name}')",
                 f"[role='tab']:has-text('{publication_name}')",
                 f"[data-publication-name*='{publication_name}']",
-                "ul.list-inline li a[href*='/eedition']",
-            ]
+            ])
             for selector in selectors:
                 with suppress(Exception):
                     tab = page.locator(selector).first

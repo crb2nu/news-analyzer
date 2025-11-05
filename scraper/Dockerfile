@@ -55,7 +55,8 @@ COPY pyproject.toml poetry.lock ./
 
 # Install dependencies
 RUN poetry config virtualenvs.in-project true && \
-    poetry install --only=main --no-interaction --no-ansi && \
+    poetry lock --no-interaction && \
+    poetry install --only=main --no-interaction --no-ansi --sync && \
     rm -rf $POETRY_CACHE_DIR
 
 # Install Playwright browsers (chromium + firefox for stability)

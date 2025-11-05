@@ -29,6 +29,26 @@ spec:
         - containerPort: 8000
           name: http
         env:
+        - name: METRICS_LABEL_component
+          value: summarizer
+        - name: METRICS_LABEL_namespace
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: METRICS_LABEL_pod
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: METRICS_LABEL_node
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: LOG_FORMAT
+          value: json
+        - name: METRICS_JOB_NAME
+          value: summarizer
+        - name: METRICS_PUSHGATEWAY_URL
+          value: ""
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
@@ -138,6 +158,26 @@ spec:
             imagePullPolicy: Always
             command: ["python", "-m", "batch"]
             env:
+            - name: METRICS_LABEL_component
+              value: summarizer_batch
+            - name: METRICS_LABEL_namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: METRICS_LABEL_pod
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: METRICS_LABEL_node
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LOG_FORMAT
+              value: json
+            - name: METRICS_JOB_NAME
+              value: summarizer_batch
+            - name: METRICS_PUSHGATEWAY_URL
+              value: ""
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

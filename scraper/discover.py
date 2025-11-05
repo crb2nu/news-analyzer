@@ -5,13 +5,14 @@ Edition discovery module for finding available e-edition content.
 from pathlib import Path
 from contextlib import suppress
 from playwright.sync_api import (
-    sync_playwright,
     TimeoutError as PlaywrightTimeoutError,
     BrowserContext,
     Page,
 )
 from .config import Settings
 from .login import verify_session, login
+from .browser_manager import BrowserManager, storage_state_path
+from .observability import Metrics, TraceHelper, proxy_label_from_settings
 import logging
 import re
 from datetime import datetime, date
@@ -23,6 +24,7 @@ from .normalize import normalize_section
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+METRICS = Metrics.init()
 
 DEFAULT_PUBLICATION = "Smyth County News & Messenger"
 PUBLICATION_SLUGS = {
@@ -63,8 +65,7 @@ class EditionDiscoverer:
     def __init__(self, storage_path: Path = Path("storage_state.json")):
         self.settings = Settings()
         self.storage_path = storage_path
-        self._pw = None
-        self._browser = None
+        self._bm: Optional[BrowserManager] = None
         self._authed = False
         
     def ensure_authenticated(self) -> bool:
@@ -108,40 +109,17 @@ class EditionDiscoverer:
         publication = publication or DEFAULT_PUBLICATION
         selected_publication = publication
         try:
-            # Launch/reuse a single browser per process to save memory
-            if self._pw is None or self._browser is None:
-                self._pw = sync_playwright().start()
-                proxy_config = self.settings.get_playwright_proxy()
-                self._browser = self._pw.firefox.launch(
-                    headless=True,
-                    proxy=proxy_config,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--disable-software-rasterizer",
-                        "--single-process",
-                        "--no-zygote",
-                    ],
-                )
-
-            context = self._browser.new_context(storage_state=str(self.storage_path))
-            # Reduce bandwidth and memory: block heavy resources
-            try:
-                def _route_handler(route, request):
-                    rtype = request.resource_type
-                    url = request.url
-                    if rtype in ("image", "media", "font"):
-                        return route.abort()
-                    # Skip common analytics/ads
-                    if any(s in url for s in ("googletagmanager", "doubleclick", "adservice", "analytics", "facebook")):
-                        return route.abort()
-                    return route.continue_()
-                context.route("**/*", _route_handler)
-            except Exception:
-                pass
-                page = context.new_page()
+            if self._bm is None:
+                self._bm = BrowserManager(self.settings)
+                self._bm.start()
+            # Ensure we bind storage-state path to current proxy endpoint
+            spath = storage_state_path(self.settings)
+            context = self._bm.new_context(storage_path=spath)
+            th = TraceHelper(context)
+            th.start()
+            page = context.new_page()
+            proxy_label = proxy_label_from_settings(self.settings)
+            logger.info("Discover start", extra={"publication": selected_publication, "date": target_date.isoformat(), "proxy": proxy_label})
                 
                 # Navigate to the e-edition root (allows switching across publications)
                 base_url = "https://swvatoday.com/eedition/"
@@ -184,10 +162,23 @@ class EditionDiscoverer:
                 # Wait briefly for viewer content to settle
                 page.wait_for_timeout(2000)
 
-                edition = self._discover_edition_pages(page, target_date, base_url)
+                # Timed discovery block
+                proxy_label = proxy_label_from_settings(self.settings)
+                with METRICS.timer("discover", publication=selected_publication, proxy=proxy_label):
+                    edition = self._discover_edition_pages(page, target_date, base_url)
                 
                 if edition:
+                    METRICS.inc_discover_run(publication=selected_publication, proxy=proxy_label)
+                    if edition.pages:
+                        METRICS.observe_pages_found(len(edition.pages), publication=selected_publication, proxy=proxy_label)
+                        logger.info("Pages found", extra={"publication": selected_publication, "date": target_date.isoformat(), "proxy": proxy_label, "pages": len(edition.pages)})
                     edition.publication = selected_publication
+                # Save a trace per run named by publication and date
+                try:
+                    slug = PUBLICATION_SLUGS.get(selected_publication, selected_publication).replace(" ", "_")
+                    th.stop(f"discover_{slug}_{target_date.isoformat()}")
+                except Exception:
+                    pass
                 return edition
                 
         except Exception as e:
@@ -196,13 +187,8 @@ class EditionDiscoverer:
 
     def close(self):
         try:
-            if self._browser:
-                self._browser.close()
-        except Exception:
-            pass
-        try:
-            if self._pw:
-                self._pw.stop()
+            if self._bm:
+                self._bm.close()
         except Exception:
             pass
     
@@ -996,6 +982,9 @@ class EditionDiscoverer:
 def main():
     """CLI interface for edition discovery"""
     import argparse
+    from .observability import setup_logging, Metrics
+    setup_logging()
+    _ = Metrics.init()  # initialize registry if configured
     
     parser = argparse.ArgumentParser(description="Discover e-edition content")
     parser.add_argument("--date", type=str, help="Date in YYYY-MM-DD format (default: today)")
@@ -1035,7 +1024,18 @@ def main():
         print(f"Edition info saved to {output_path}")
     else:
         print(f"No edition found for {target_date}")
+        # Push metrics even on failure to capture signals
+        try:
+            METRICS.push()
+        except Exception:
+            pass
         exit(1)
+
+    # Push metrics on success
+    try:
+        METRICS.push()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

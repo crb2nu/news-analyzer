@@ -8,10 +8,13 @@ from .config import Settings
 import time
 import logging
 from typing import Optional
+from .observability import Metrics, proxy_label_from_settings
+from .browser_manager import BrowserManager, storage_state_path
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+METRICS = Metrics.init()
 
 E_EDITION_URL = "https://swvatoday.com/eedition/"
 LOGIN_URL = f"https://swvatoday.com/users/login/?referer_url={quote_plus(E_EDITION_URL)}"
@@ -216,8 +219,10 @@ def login(
     if lockout_guard.is_active():
         return False
 
+    proxy_label = proxy_label_from_settings(settings)
     for attempt in range(max_retries):
         logger.info(f"Login attempt {attempt + 1}/{max_retries}")
+        METRICS.inc_login_attempt(publication=None, proxy=proxy_label)
 
         modes = [True, False] if use_proxy else [False]
         for mode in modes:
@@ -228,24 +233,11 @@ def login(
                 logger.info("Using direct connection (no proxy)")
 
             try:
-                with sync_playwright() as p:
-                    # Prefer Firefox in containers; chromium can crash in some K8s setups
-                    browser = p.firefox.launch(
-                        headless=True,
-                        proxy=proxy_config,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu",
-                            "--disable-software-rasterizer",
-                            "--single-process",
-                            "--no-zygote",
-                        ],
-                    )
-
-                    context = browser.new_context()
-                    page = context.new_page()
+                # Use BrowserManager for consistent proxy and startup args
+                bm = BrowserManager(settings)
+                bm.start()
+                context = bm.new_context()
+                page = context.new_page()
 
                     logger.info("Navigating to account login page")
                     try:
@@ -311,16 +303,16 @@ def login(
                             _debug_upload(page, debug_helper, prefix="debug/login/error_banner")
                         if "too many login attempts" in error_text.lower():
                             lockout_guard.activate("site lockout message")
-                            browser.close()
+                            bm.close()
                             return False
-                        browser.close()
+                        bm.close()
                         continue
 
                     if "users/login" in page.url.lower():
                         logger.error("Login failed - still on login page")
                         if debug_helper:
                             _debug_upload(page, debug_helper, prefix="debug/login/post_submit")
-                        browser.close()
+                        bm.close()
                         continue
 
                     if not page.url.startswith(E_EDITION_URL):
@@ -331,25 +323,28 @@ def login(
                             logger.error("Unable to load e-edition after login")
                             if debug_helper:
                                 _debug_upload(page, debug_helper, prefix="debug/login/eedition_failed")
-                            browser.close()
+                            bm.close()
                             continue
 
                     _dismiss_cookie_banner(page, debug_helper, label="post_login_edition")
 
-                    logger.info(f"Saving session state to {storage_path}")
-                    context.storage_state(path=str(storage_path))
+                    target_path = storage_path or storage_state_path(settings)
+                    logger.info(f"Saving session state to {target_path}")
+                    context.storage_state(path=str(target_path))
                     if storage_path.exists() and storage_path.stat().st_size > 0:
                         logger.info("Login successful and session state saved")
                         lockout_guard.clear()
-                        browser.close()
+                        METRICS.inc_login_success(publication=None, proxy=proxy_label)
+                        bm.close()
                         return True
                     else:
                         logger.error("Storage state file not created or empty")
-                        browser.close()
+                        bm.close()
                         continue
 
             except Exception as e:
                 logger.error(f"Login attempt mode ({'proxy' if mode else 'direct'}) failed: {str(e)}")
+                METRICS.inc_login_failure(publication=None, proxy=proxy_label)
                 continue
 
         if attempt < max_retries - 1:
@@ -380,10 +375,10 @@ def verify_session(storage_path: Path = Path("storage_state.json")) -> bool:
     settings = Settings()
     
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=str(storage_path))
-            page = context.new_page()
+        bm = BrowserManager(settings)
+        bm.start()
+        context = bm.new_context(storage_path=storage_path)
+        page = context.new_page()
             
             # Try to access a protected page
             page.goto(E_EDITION_URL, timeout=60000)
@@ -392,11 +387,13 @@ def verify_session(storage_path: Path = Path("storage_state.json")) -> bool:
             # Check if we're redirected to login (session expired)
             if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():
                 logger.info("Session expired - login required")
-                browser.close()
+                METRICS.inc_verify_failure(publication=None, proxy=proxy_label)
+                bm.close()
                 return False
             
             logger.info("Session is still valid")
-            browser.close()
+            METRICS.inc_verify_success(publication=None, proxy=proxy_label)
+            bm.close()
             return True
             
     except Exception as e:
@@ -406,6 +403,9 @@ def verify_session(storage_path: Path = Path("storage_state.json")) -> bool:
 
 if __name__ == "__main__":
     import argparse
+    from .observability import setup_logging, Metrics
+    setup_logging()
+    _ = Metrics.init()
     
     parser = argparse.ArgumentParser(description="Login to swvatoday.com e-edition")
     parser.add_argument("--no-proxy", action="store_true", help="Disable proxy usage")
@@ -419,15 +419,31 @@ if __name__ == "__main__":
     if args.verify:
         if verify_session(storage_path):
             print("Session is valid")
+            try:
+                METRICS.push()
+            except Exception:
+                pass
             exit(0)
         else:
             print("Session is invalid or expired")
+            try:
+                METRICS.push()
+            except Exception:
+                pass
             exit(1)
     else:
         success = login(storage_path, use_proxy=not args.no_proxy)
         if success:
             print("Login successful")
+            try:
+                METRICS.push()
+            except Exception:
+                pass
             exit(0)
         else:
             print("Login failed")
+            try:
+                METRICS.push()
+            except Exception:
+                pass
             exit(1)

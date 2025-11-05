@@ -18,6 +18,9 @@ GIT_URL=${GIT_URL:-}
 GIT_REF=${GIT_REF:-main}
 BUILD=${BUILD:-all} # all|none|comma-separated list (scraper,extractor,notifier,summarizer)
 TRIGGER_PIPELINE=${TRIGGER_PIPELINE:-true}
+# Observability overrides (optional)
+METRICS_PUSHGATEWAY_URL=${METRICS_PUSHGATEWAY_URL:-}
+LOG_FORMAT=${LOG_FORMAT:-json}
 
 usage() {
   cat <<EOF
@@ -34,6 +37,8 @@ Options:
   --git-url URL               Repo URL for Kaniko builder (defaults to current repo remote if detected)
   --git-ref REF               Git ref/branch for builder (default: ${GIT_REF})
   --build {all|none|list}     Build images in-cluster (default: ${BUILD})
+  --metrics-pushgateway URL   Set METRICS_PUSHGATEWAY_URL on workloads (default: empty)
+  --log-format FORMAT         Set LOG_FORMAT on workloads (default: ${LOG_FORMAT})
   --no-trigger                Do not trigger first scrape/extract/summarize/notify
   -h, --help                  Show this help
 EOF
@@ -131,6 +136,26 @@ cleanup_pods() {
   done
 }
 
+cleanup_replicasets() {
+  if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
+    log "Namespace $NAMESPACE not present yet; skipping ReplicaSet cleanup"
+    return
+  fi
+  log "Removing orphan ReplicaSets with zero replicas"
+  local rs=()
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && rs+=("$name")
+  done < <(kubens get rs -o jsonpath='{range .items[?(@.status.replicas==0 && @.status.readyReplicas==0 && @.status.availableReplicas==0)]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+  if [[ ${#rs[@]} -eq 0 ]]; then
+    log "No zero-replica ReplicaSets to delete"
+    return
+  fi
+  for r in "${rs[@]}"; do
+    log "Deleting ReplicaSet $r"
+    kubens delete rs "$r" --ignore-not-found >/dev/null 2>&1 || true
+  done
+}
+
 ensure_postgres_ready() {
   log "Waiting for Postgres statefulset (up to 10m)"
   if kubens rollout status statefulset/postgres --timeout=10m; then
@@ -168,6 +193,8 @@ while [[ $# -gt 0 ]]; do
     --git-url) GIT_URL="$2"; shift 2;;
     --git-ref) GIT_REF="$2"; shift 2;;
     --build) BUILD="$2"; shift 2;;
+    --metrics-pushgateway) METRICS_PUSHGATEWAY_URL="$2"; shift 2;;
+    --log-format) LOG_FORMAT="$2"; shift 2;;
     --no-trigger) TRIGGER_PIPELINE=false; shift;;
     -h|--help) usage; exit 0;;
     *) warn "Unknown option: $1"; usage; exit 1;;
@@ -258,6 +285,99 @@ apply_app() {
     || warn "Summarizer not ready yet; images may be missing. Continuing to builders."
 }
 
+# Set observability envs on workloads so recent metrics/logging changes are active
+patch_observability_env() {
+  log "Patching observability env on workloads"
+  local envs=("LOG_FORMAT=${LOG_FORMAT}")
+  if [[ -n "${METRICS_PUSHGATEWAY_URL}" ]]; then
+    envs+=("METRICS_PUSHGATEWAY_URL=${METRICS_PUSHGATEWAY_URL}")
+  fi
+  # Scraper cronjobs
+  if kubens get cronjob/news-analyzer-scraper >/dev/null 2>&1; then
+    kubens set env cronjob/news-analyzer-scraper "${envs[@]}" METRICS_JOB_NAME=scraper SMARTPROXY_STICKY=1 || true
+  fi
+  if kubens get cronjob/news-analyzer-auth-refresh >/dev/null 2>&1; then
+    kubens set env cronjob/news-analyzer-auth-refresh "${envs[@]}" METRICS_JOB_NAME=auth_refresh SMARTPROXY_STICKY=1 || true
+  fi
+  # Extractor cronjobs
+  if kubens get cronjob/news-analyzer-extractor >/dev/null 2>&1; then
+    kubens set env cronjob/news-analyzer-extractor "${envs[@]}" METRICS_JOB_NAME=extractor || true
+  fi
+  if kubens get cronjob/news-analyzer-extractor-manual >/dev/null 2>&1; then
+    kubens set env cronjob/news-analyzer-extractor-manual "${envs[@]}" METRICS_JOB_NAME=extractor_manual || true
+  fi
+  # Notifier cronjob (optional)
+  if kubens get cronjob/news-analyzer-notifier >/dev/null 2>&1; then
+    kubens set env cronjob/news-analyzer-notifier "${envs[@]}" METRICS_JOB_NAME=notifier || true
+  fi
+  # Summarizer deployment
+  if kubens get deploy/news-analyzer-summarizer >/dev/null 2>&1; then
+    kubens set env deploy/news-analyzer-summarizer "${envs[@]}" METRICS_JOB_NAME=summarizer || true
+    kubens rollout restart deploy/news-analyzer-summarizer || true
+  fi
+}
+
+verify_observability_env() {
+  log "Verifying observability env on applied workloads"
+  local missing=0
+
+  check_env() {
+    local kind="$1" name="$2" var="$3";
+    if ! kubens get "$kind" "$name" >/dev/null 2>&1; then
+      return 0
+    fi
+    local path jsonpath
+    case "$kind" in
+      cronjob) jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].env[*].name}' ;;
+      deploy|deployment|Deployment) kind="deploy"; jsonpath='{.spec.template.spec.containers[0].env[*].name}' ;;
+      *) return 0 ;;
+    esac
+    local names
+    names=$(kubens get "$kind" "$name" -o jsonpath="$jsonpath" 2>/dev/null || true)
+    if [[ " $names " != *" $var "* ]]; then
+      warn "Missing $var on $kind/$name"
+      missing=$((missing+1))
+    fi
+  }
+
+  # Scraper
+  check_env cronjob news-analyzer-scraper LOG_FORMAT
+  check_env cronjob news-analyzer-scraper METRICS_JOB_NAME
+  check_env cronjob news-analyzer-scraper METRICS_LABEL_namespace
+  check_env cronjob news-analyzer-scraper METRICS_LABEL_component
+  # Auth refresh
+  check_env cronjob news-analyzer-auth-refresh LOG_FORMAT
+  check_env cronjob news-analyzer-auth-refresh METRICS_JOB_NAME
+  check_env cronjob news-analyzer-auth-refresh METRICS_LABEL_namespace
+  check_env cronjob news-analyzer-auth-refresh METRICS_LABEL_component
+  # Extractor
+  check_env cronjob news-analyzer-extractor LOG_FORMAT
+  check_env cronjob news-analyzer-extractor METRICS_JOB_NAME
+  check_env cronjob news-analyzer-extractor METRICS_LABEL_namespace
+  check_env cronjob news-analyzer-extractor METRICS_LABEL_component
+  check_env job news-analyzer-extractor-manual LOG_FORMAT || true
+  # Notifier
+  check_env cronjob news-analyzer-notifier LOG_FORMAT
+  check_env cronjob news-analyzer-notifier METRICS_JOB_NAME
+  check_env cronjob news-analyzer-notifier METRICS_LABEL_namespace
+  check_env cronjob news-analyzer-notifier METRICS_LABEL_component
+  # Summarizer
+  check_env deploy news-analyzer-summarizer LOG_FORMAT
+  check_env deploy news-analyzer-summarizer METRICS_JOB_NAME
+  check_env deploy news-analyzer-summarizer METRICS_LABEL_namespace
+  check_env deploy news-analyzer-summarizer METRICS_LABEL_component
+  check_env cronjob news-analyzer-summarizer-batch LOG_FORMAT
+  check_env cronjob news-analyzer-summarizer-batch METRICS_JOB_NAME
+  check_env cronjob news-analyzer-summarizer-batch METRICS_LABEL_namespace
+  check_env cronjob news-analyzer-summarizer-batch METRICS_LABEL_component
+
+  if [[ $missing -gt 0 ]]; then
+    warn "$missing workload(s) missing observability env. You can re-run with --metrics-pushgateway <url> to set a Pushgateway."
+  else
+    log "Observability env present on all detected workloads"
+  fi
+}
+
 apply_ops_and_build() {
   if [[ -d k8s/ops ]]; then
     log "Applying ops overlay (health + cleanup)"
@@ -319,18 +439,27 @@ build_components() {
 trigger_pipeline() {
   log "Triggering first pipeline run (auth→scrape→extract→summarize)"
   local ts=$(date +%s)
-  # auth refresh
-  kubens create job --from=cronjob/news-analyzer-auth-refresh auth-${ts}
-  # Wait briefly then trigger scraper
-  sleep 5
-  kubens create job --from=cronjob/news-analyzer-scraper scrape-${ts}
-  # extractor and summarizer-batch
-  sleep 5
-  kubens create job --from=cronjob/news-analyzer-extractor extract-${ts}
-  sleep 5
-  kubens create job --from=cronjob/news-analyzer-summarizer-batch sum-${ts}
+  # auth refresh (if present)
+  if kubens get cronjob/news-analyzer-auth-refresh >/dev/null 2>&1; then
+    kubens create job --from=cronjob/news-analyzer-auth-refresh auth-${ts} || true
+    sleep 5
+  fi
+  # scraper
+  if kubens get cronjob/news-analyzer-scraper >/dev/null 2>&1; then
+    kubens create job --from=cronjob/news-analyzer-scraper scrape-${ts} || true
+    sleep 5
+  fi
+  # extractor
+  if kubens get cronjob/news-analyzer-extractor >/dev/null 2>&1; then
+    kubens create job --from=cronjob/news-analyzer-extractor extract-${ts} || true
+    sleep 5
+  fi
+  # summarizer batch cronjob may not exist; skip if missing
+  if kubens get cronjob/news-analyzer-summarizer-batch >/dev/null 2>&1; then
+    kubens create job --from=cronjob/news-analyzer-summarizer-batch sum-${ts} || true
+  fi
   # notifier is optional; enable if you want immediate digest
-  if kubectl -n "$NAMESPACE" get cronjob/news-analyzer-notifier >/dev/null 2>&1; then
+  if kubens get cronjob/news-analyzer-notifier >/dev/null 2>&1; then
     kubens create job --from=cronjob/news-analyzer-notifier notify-${ts} || true
   fi
 }
@@ -339,11 +468,14 @@ main() {
   warn_unready_nodes
   cleanup_jobs
   cleanup_pods
+  cleanup_replicasets
 
   ensure_namespace
   ensure_harbor_pull_secret
   apply_base
   apply_app
+  patch_observability_env
+  verify_observability_env
   apply_ops_and_build
 
   cleanup_jobs
@@ -358,6 +490,7 @@ main() {
   if [[ "$TRIGGER_PIPELINE" == "true" ]]; then
     cleanup_jobs
     cleanup_pods
+    cleanup_replicasets
     trigger_pipeline
   else
     log "Skipping initial pipeline trigger"

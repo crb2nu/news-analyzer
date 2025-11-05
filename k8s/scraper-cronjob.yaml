@@ -37,6 +37,28 @@ spec:
               DATE=$(date +%Y-%m-%d)
               python -m scraper.downloader --date $DATE --storage /app/storage/storage_state.json
             env:
+            - name: METRICS_LABEL_component
+              value: scraper
+            - name: METRICS_LABEL_namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: METRICS_LABEL_pod
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: METRICS_LABEL_node
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LOG_FORMAT
+              value: json
+            - name: METRICS_JOB_NAME
+              value: scraper
+            - name: METRICS_PUSHGATEWAY_URL
+              value: ""
+            - name: SMARTPROXY_STICKY
+              value: "1"
             - name: HOME
               value: /home/scraper
             - name: PLAYWRIGHT_BROWSERS_PATH
@@ -160,6 +182,28 @@ spec:
               chmod 755 /home/scraper
               python -m scraper.login --storage /app/storage/storage_state.json
             env:
+            - name: METRICS_LABEL_component
+              value: auth_refresh
+            - name: METRICS_LABEL_namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: METRICS_LABEL_pod
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: METRICS_LABEL_node
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LOG_FORMAT
+              value: json
+            - name: METRICS_JOB_NAME
+              value: auth_refresh
+            - name: METRICS_PUSHGATEWAY_URL
+              value: ""
+            - name: SMARTPROXY_STICKY
+              value: "1"
             - name: HOME
               value: /home/scraper
             - name: PLAYWRIGHT_BROWSERS_PATH

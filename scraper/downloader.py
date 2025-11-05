@@ -131,7 +131,12 @@ class DownloadCache:
             return '.html'
     
     def _download_with_proxy(self, url: str, max_retries: int = 3) -> Optional[bytes]:
-        """Download content using proxy with retry logic"""
+        """Download content using proxy with retry logic and a final direct fallback.
+
+        Strategy:
+        - Try up to `max_retries` with rotating SmartProxy endpoints.
+        - If all proxy attempts fail, try one direct request (no proxy) before giving up.
+        """
         for attempt in range(max_retries):
             try:
                 # Get random proxy
@@ -169,9 +174,25 @@ class DownloadCache:
                     logger.info(f"Waiting {wait_time} seconds before retry...")
                     time.sleep(wait_time)
                 continue
-        
-        logger.error(f"All {max_retries} download attempts failed for {url}")
-        return None
+        # Final direct (no-proxy) attempt
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            logger.info("All proxy attempts failed; trying direct download once for %s", url)
+            resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+            resp.raise_for_status()
+            logger.info("Direct download succeeded (%d bytes) for %s", len(resp.content), url)
+            return resp.content
+        except requests.RequestException as e:
+            logger.error(f"All {max_retries} proxy attempts and final direct attempt failed for {url}")
+            logger.error("Direct attempt error: %s", e)
+            return None
     
     def is_cached(self, edition: Edition, page: EditionPage) -> bool:
         """Check if page content is already cached in MinIO"""

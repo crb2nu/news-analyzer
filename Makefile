@@ -129,9 +129,16 @@ backfill:
 	  "            configMapKeyRef:" \
 	  "              name: news-analyzer-config" \
 	  "              key: LOG_LEVEL" \
-	  "  backoffLimit: 0" \
-	| kubectl apply -f -; \
-	echo "Backfill job $$job created. Tail logs with: kubectl logs -f job/$$job -n news-analyzer"
+  "        resources:" \
+  "          requests:" \
+  "            memory: \"1Gi\"" \
+  "            cpu: \"4\"" \
+  "          limits:" \
+  "            memory: \"2Gi\"" \
+  "            cpu: \"4\"" \
+  "  backoffLimit: 0" \
+| kubectl apply -f -; \
+echo "Backfill job $$job created. Tail logs with: kubectl logs -f job/$$job -n news-analyzer"
 # Download editions into cache for a date range (Wednesdays/Saturdays): make scrape-range START=YYYY-MM-DD END=YYYY-MM-DD [FORCE=1]
 scrape-range:
 	@if [ -z "$(START)" ] || [ -z "$(END)" ]; then \
@@ -244,12 +251,12 @@ scrape-range:
 	  "        - name: PUBLICATIONS" \
 	  "          value: \"$(PUBLICATIONS)\"" \
 	  "        resources:" \
-	  "          requests:" \
-	  "            memory: \"1Gi\"" \
-	  "            cpu: \"500m\"" \
-	  "          limits:" \
-	  "            memory: \"2Gi\"" \
-	  "            cpu: \"1\"" \
+  "          requests:" \
+  "            memory: \"1Gi\"" \
+  "            cpu: \"4\"" \
+  "          limits:" \
+  "            memory: \"2Gi\"" \
+  "            cpu: \"4\"" \
 	  "        command:" \
 	  "        - /bin/sh" \
 	  "        - -c" \
@@ -278,12 +285,13 @@ scrape-range:
 	  '              extra="--force"' \
 	  '            fi' \
 	  '            OLD_IFS="$$IFS"' \
-	  '            IFS=,; for pub in $${PUB_LIST}; do' \
-	  '              pub_trim=$$(echo "$$pub" | sed -e "s/^ *//" -e "s/ *$$//")' \
-	  '              [ -z "$$pub_trim" ] && continue' \
-	  '              echo "  -> $$pub_trim"' \
-	  '              python -m scraper.downloader --date $$d $$extra --publication "$$pub_trim" --storage /app/storage/storage_state.json' \
-	  '            done' \
+  '            IFS=,; for pub in $${PUB_LIST}; do' \
+  '              pub_trim=$$(echo "$$pub" | sed -e "s/^ *//" -e "s/ *$$//")' \
+  '              [ -z "$$pub_trim" ] && continue' \
+  '              echo "  -> $$pub_trim"' \
+  '              python -m scraper.downloader --date $$d $$extra --publication "$$pub_trim" --storage /app/storage/storage_state.json' \
+  '              sleep 3' \
+  '            done' \
 	  '            IFS="$$OLD_IFS"' \
 	  "          done < /tmp/download-dates.txt" \
 	  "        volumeMounts:" \

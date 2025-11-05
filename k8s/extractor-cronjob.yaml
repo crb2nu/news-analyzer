@@ -36,6 +36,26 @@ spec:
               DATE=$(date +%Y-%m-%d)
               python -m processor --date $DATE
             env:
+            - name: METRICS_LABEL_component
+              value: extractor
+            - name: METRICS_LABEL_namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: METRICS_LABEL_pod
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: METRICS_LABEL_node
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LOG_FORMAT
+              value: json
+            - name: METRICS_JOB_NAME
+              value: extractor
+            - name: METRICS_PUSHGATEWAY_URL
+              value: ""
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -110,6 +130,26 @@ spec:
           DATE=$(date +%Y-%m-%d)
           python -m processor --date $DATE --force
         env:
+        - name: METRICS_LABEL_component
+          value: extractor_manual
+        - name: METRICS_LABEL_namespace
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: METRICS_LABEL_pod
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: METRICS_LABEL_node
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: LOG_FORMAT
+          value: json
+        - name: METRICS_JOB_NAME
+          value: extractor_manual
+        - name: METRICS_PUSHGATEWAY_URL
+          value: ""
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:

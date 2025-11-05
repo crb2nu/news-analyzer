@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 from typing import List
 import random
 import urllib.parse
+import os
 
 class Settings(BaseSettings):
     # E-edition credentials
@@ -40,6 +41,10 @@ class Settings(BaseSettings):
 
     # Scraper performance tuning
     scraper_parallelism: int = 4  # concurrent page downloads per edition
+    # Force single proxy stickiness per process (default true)
+    smartproxy_sticky: bool = True
+    # Optional explicit SmartProxy port (overrides sticky selection if set)
+    smartproxy_port: int | None = None
 
     # Login safety configuration
     lockout_cooldown_minutes: int = 30
@@ -50,16 +55,42 @@ class Settings(BaseSettings):
         env_file = '.env'
         env_file_encoding = 'utf-8'
     
+    def _select_proxy_port(self) -> int:
+        """Select a SmartProxy port with optional sticky behavior.
+
+        If `SMARTPROXY_STICKY` (default: "1") is truthy, reuse the same
+        port for the whole process by honoring/persisting `SMARTPROXY_PORT`.
+        Otherwise, pick a random port each call.
+        """
+        sticky_env = str(os.getenv("SMARTPROXY_STICKY", "1")).lower() in ("1", "true", "yes", "on")
+        sticky = self.smartproxy_sticky or sticky_env
+        if sticky:
+            # explicit port wins
+            if self.smartproxy_port:
+                return int(self.smartproxy_port)
+            env_port = os.getenv("SMARTPROXY_PORT")
+            if env_port:
+                try:
+                    return int(env_port)
+                except ValueError:
+                    pass
+            port = random.choice(self.smartproxy_ports)
+            # Persist for subsequent calls in this process
+            os.environ["SMARTPROXY_PORT"] = str(port)
+            return port
+        # Non-sticky mode
+        return random.choice(self.smartproxy_ports)
+
     def get_random_proxy(self) -> dict:
-        """Get a random proxy configuration for requests"""
-        port = random.choice(self.smartproxy_ports)
+        """Get a proxy configuration for Requests (sticky per process by default)."""
+        port = self._select_proxy_port()
         encoded_password = urllib.parse.quote_plus(self.smartproxy_password)
         proxy_url = f"http://{self.smartproxy_username}:{encoded_password}@{self.smartproxy_host}:{port}"
         return {"http": proxy_url, "https": proxy_url}
     
     def get_playwright_proxy(self) -> dict:
-        """Get proxy configuration for Playwright"""
-        port = random.choice(self.smartproxy_ports)
+        """Get proxy configuration for Playwright (sticky per process by default)."""
+        port = self._select_proxy_port()
         return {
             "server": f"http://{self.smartproxy_host}:{port}",
             "username": self.smartproxy_username,
