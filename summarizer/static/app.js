@@ -132,6 +132,14 @@ async function loadEvents(forceRefresh = false) {
   const data = await fetchJSON('/events');
   eventsCache.data = data.events || {};
   eventsCache.lastFetched = Date.now();
+  try {
+    const total = Object.values(eventsCache.data).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
+    const badge = document.querySelector('#eventsBadge');
+    if (badge) {
+      badge.textContent = String(total);
+      badge.classList.toggle('hidden', total === 0);
+    }
+  } catch (_) {}
   renderEvents(eventsCache.data);
   setStatus('Events updated');
 }
@@ -260,6 +268,23 @@ function render(items, context, query) {
   const plural = items.length === 1 ? '' : 's';
   header.textContent = `${items.length} article${plural} • ${fmtDate(context.date)}`;
   feedEl.appendChild(header);
+
+  // Update Events badge with count from this date
+  try {
+    const all = items.flatMap((it) => (it.events || []));
+    const ids = new Set();
+    let count = 0;
+    for (const ev of all) {
+      if (!ev) continue;
+      const key = ev.id || `t:${ev.title || ''}`;
+      if (!ids.has(key)) { ids.add(key); count++; }
+    }
+    const badge = document.querySelector('#eventsBadge');
+    if (badge) {
+      badge.textContent = String(count);
+      badge.classList.toggle('hidden', count === 0);
+    }
+  } catch (_) {}
 
   for (const item of items) {
     const card = document.createElement('article');
