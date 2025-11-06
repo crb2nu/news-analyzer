@@ -441,25 +441,58 @@ def build_source_page(article: Dict) -> str:
 <head>
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>{title} — Original Source</title>
-  <style>
-    body {{ font-family: 'Inter', system-ui, sans-serif; margin: 0; background:#0f172a; color:#e5e7eb; }}
+    <title>{title} — Original Source</title>
+    <style>
+    :root {{
+      --bg: #0f172a; /* dark */
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --link: #38bdf8;
+      --card: rgba(15,23,42,0.9);
+      --border: rgba(148,163,184,0.2);
+      --accent-bg: rgba(56,189,248,0.1);
+      --accent-border: rgba(56,189,248,0.25);
+    }}
+    [data-theme="light"] {{
+      --bg: #ffffff;
+      --text: #0b1020;
+      --muted: #475569;
+      --link: #2563eb;
+      --card: #ffffff;
+      --border: rgba(30,41,59,0.18);
+      --accent-bg: rgba(37,99,235,0.08);
+      --accent-border: rgba(37,99,235,0.22);
+    }}
+    body {{ font-family: 'Inter', system-ui, sans-serif; margin: 0; background:var(--bg); color:var(--text); }}
     .container {{ max-width: 920px; margin: 0 auto; padding: 32px 20px 56px; }}
-    a {{ color: #38bdf8; }}
+    a {{ color: var(--link); }}
     header {{ margin-bottom: 24px; }}
     h1 {{ margin: 0 0 12px; font-size: 2.2rem; line-height: 1.2; }}
-    .meta {{ display:flex; flex-wrap:wrap; gap:8px; color:#94a3b8; font-size:0.9rem; margin-bottom: 20px; }}
+    .meta {{ display:flex; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:0.9rem; margin-bottom: 20px; }}
     .meta-tag {{ background:rgba(148,163,184,0.15); padding:4px 10px; border-radius:999px; }}
-    .summary {{ background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); padding:16px 20px; border-radius:12px; margin-bottom:24px; }}
+    .summary {{ background:var(--accent-bg); border:1px solid var(--accent-border); padding:16px 20px; border-radius:12px; margin-bottom:24px; }}
     .summary h2 {{ margin-top:0; }}
-    .article-body {{ background:rgba(15,23,42,0.9); border:1px solid rgba(148,163,184,0.2); border-radius:16px; padding:24px; box-shadow:0 25px 50px -12px rgba(15,23,42,0.6); }}
-    .article-content {{ white-space:pre-wrap; line-height:1.6; font-size:1rem; color:#e2e8f0; }}
+    .article-body {{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:24px; box-shadow:0 25px 50px -12px rgba(15,23,42,0.2); }}
+    .article-content {{ white-space:pre-wrap; line-height:1.6; font-size:1rem; color:var(--text); }}
     .events {{ margin-top:32px; }}
     .events ul {{ list-style:none; padding:0; margin:0; display:grid; gap:16px; }}
-    .events li {{ background:rgba(59,130,246,0.12); border:1px solid rgba(59,130,246,0.25); padding:16px 20px; border-radius:12px; }}
-    .events .event-time, .events .event-location {{ display:inline-block; margin-left:10px; color:#cbd5f5; font-size:0.9rem; }}
-    footer {{ margin-top:40px; font-size:0.9rem; color:#94a3b8; text-align:center; }}
+    .events li {{ background:var(--accent-bg); border:1px solid var(--accent-border); padding:16px 20px; border-radius:12px; }}
+    .events .event-time, .events .event-location {{ display:inline-block; margin-left:10px; color:var(--muted); font-size:0.9rem; }}
+    footer {{ margin-top:40px; font-size:0.9rem; color:var(--muted); text-align:center; }}
   </style>
+  <script>
+    (function(){{
+      try {{
+        var raw = localStorage.getItem('news-analyzer-feed-v2');
+        var prefs = raw ? JSON.parse(raw) : {{}};
+        var mode = prefs.theme || 'system';
+        var root = document.documentElement;
+        if (mode === 'light') root.setAttribute('data-theme','light');
+        else if (mode === 'dark') root.setAttribute('data-theme','dark');
+        else root.removeAttribute('data-theme');
+      }} catch(e) {{}}
+    }})();
+  </script>
 </head>
 <body>
   <div class=\"container\">
@@ -483,8 +516,10 @@ def build_source_page(article: Dict) -> str:
 # API Routes
 @app.get("/")
 async def serve_index():
-    """Serve the simple frontend index page."""
-    return FileResponse(path=str((__file__).replace("api.py", "static/index.html")))
+    """Serve the simple frontend index page with no-cache headers."""
+    path = str((__file__).replace("api.py", "static/index.html"))
+    headers = {"Cache-Control": "no-store, max-age=0"}
+    return FileResponse(path=path, headers=headers)
 
 # Mount static assets (JS/CSS)
 app.mount(

@@ -264,6 +264,7 @@ function render(items, context, query) {
   for (const item of items) {
     const card = document.createElement('article');
     card.className = 'card';
+    card.tabIndex = 0;
     card.dataset.articleId = item.id;
     if (item.id && readSet.has(item.id)) card.classList.add('read');
 
@@ -284,6 +285,7 @@ function render(items, context, query) {
     const published = fmtDateTime(item.date_published);
     if (published) metaParts.push(`Published ${published}`);
     if (item.word_count) metaParts.push(`${item.word_count} words`);
+    if ((item.events || []).length) metaParts.push(`Events ×${item.events.length}`);
     meta.textContent = metaParts.join(' • ');
 
     const summary = document.createElement('div');
@@ -342,7 +344,7 @@ function render(items, context, query) {
     actions.append(copyBtn, markBtn);
     summary.appendChild(actions);
 
-    const evs = (item.events || []).filter((e) => e && e.start_time);
+    const evs = (item.events || []).filter((e) => e && (e.start_time || e.title));
     if (evs.length) {
       const inline = document.createElement('div');
       inline.className = 'event-inline';
@@ -359,6 +361,16 @@ function render(items, context, query) {
         list.appendChild(li);
       });
       inline.appendChild(list);
+      const jump = document.createElement('a');
+      jump.href = '#eventsPanel';
+      jump.className = 'kp';
+      jump.textContent = 'Jump to Events ↴';
+      jump.addEventListener('click', (e) => {
+        e.preventDefault();
+        switchView('events');
+        document.getElementById('eventsPanel')?.scrollIntoView({ behavior: 'smooth' });
+      });
+      inline.appendChild(jump);
       summary.appendChild(inline);
     }
 
@@ -465,7 +477,13 @@ async function loadFeed({ forceRefresh = false } = {}) {
 
     const totalCount = data.items ? data.items.length : 0;
     if (!filtered.length) {
-      setStatus(query || section ? 'No articles match the current filters.' : 'No articles available yet.');
+      if (eventsOnly) {
+        setStatus('No articles with events. Showing Events panel…');
+        switchView('events');
+        await loadEvents();
+      } else {
+        setStatus(query || section ? 'No articles match the current filters.' : 'No articles available yet.');
+      }
     } else {
       const base = `Showing ${filtered.length}${filtered.length !== totalCount ? ` of ${totalCount}` : ''} articles`;
       setStatus(base);
@@ -581,3 +599,25 @@ function updateURL({ date, section, q, view, eventsOnly }) {
     setLastUpdated(null);
   }
 })();
+
+// Keyboard navigation: j/k to move, Enter to open article
+document.addEventListener('keydown', (e) => {
+  const cards = Array.from(document.querySelectorAll('.feed .card'));
+  if (!cards.length) return;
+  const active = document.activeElement?.closest?.('.card');
+  const idx = active ? cards.indexOf(active) : -1;
+  if (e.key === 'j') {
+    e.preventDefault();
+    const next = cards[Math.min(idx + 1, cards.length - 1)];
+    next?.focus({ preventScroll: false });
+    next?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else if (e.key === 'k') {
+    e.preventDefault();
+    const prev = cards[Math.max(idx - 1, 0)];
+    prev?.focus({ preventScroll: false });
+    prev?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else if (e.key === 'Enter' && active) {
+    const link = active.querySelector('.summary .kp[href]');
+    if (link) window.open(link.href, '_blank', 'noopener');
+  }
+});
