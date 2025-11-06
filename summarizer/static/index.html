@@ -32,11 +32,16 @@
           <input id="eventsOnlyToggle" type="checkbox" />
           <span>Only articles with events</span>
         </label>
+        <label class="toggle">
+          <input id="hideReadToggle" type="checkbox" />
+          <span>Hide read</span>
+        </label>
         <div class="search-group">
           <input id="search" type="search" placeholder="Search title or summary" aria-label="Search articles" />
           <button id="clearSearchBtn" type="button" class="secondary">Clear</button>
         </div>
         <button id="refreshBtn" type="button">Refresh</button>
+        <button id="markAllReadBtn" type="button" class="secondary" title="Mark all on this date as read">Mark all read</button>
       </div>
       <div id="sectionChips" class="chips" aria-label="Section shortcuts"></div>
     </header>

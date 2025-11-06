@@ -8,6 +8,8 @@ const searchInput = $('#search');
 const clearSearchBtn = $('#clearSearchBtn');
 const refreshBtn = $('#refreshBtn');
 const eventsOnlyToggle = $('#eventsOnlyToggle');
+const hideReadToggle = $('#hideReadToggle');
+const markAllReadBtn = $('#markAllReadBtn');
 const sectionChips = $('#sectionChips');
 const eventsPanel = $('#eventsPanel');
 const eventsList = $('#eventsList');
@@ -19,6 +21,9 @@ const PREF_KEY = 'news-analyzer-feed-v2';
 const feedCache = new Map();
 const eventsCache = { data: null, lastFetched: null };
 let prefs = loadPrefs();
+const READ_KEY = 'news-analyzer-read-v1';
+let readSet = new Set();
+try { readSet = new Set(JSON.parse(localStorage.getItem(READ_KEY) || '[]')); } catch {}
 let suppressSectionChange = false;
 let activeView = 'feed';
 let theme = 'system';
@@ -62,6 +67,10 @@ function savePrefs(next) {
   } catch (_) {
     /* ignore storage quota errors */
   }
+}
+
+function persistReadSet() {
+  try { localStorage.setItem(READ_KEY, JSON.stringify([...readSet])); } catch {}
 }
 
 function applyTheme(mode) {
@@ -256,6 +265,7 @@ function render(items, context, query) {
     const card = document.createElement('article');
     card.className = 'card';
     card.dataset.articleId = item.id;
+    if (item.id && readSet.has(item.id)) card.classList.add('read');
 
     const h2 = document.createElement('h2');
     h2.textContent = item.title;
@@ -306,6 +316,32 @@ function render(items, context, query) {
       summary.appendChild(kp);
     }
 
+    // Inline actions
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'ghost';
+    copyBtn.textContent = 'Copy link';
+    copyBtn.addEventListener('click', async () => {
+      const href = item.id ? `${location.origin}/articles/${item.id}/source` : (item.url || '');
+      try { await navigator.clipboard.writeText(href); setStatus('Link copied'); } catch { setStatus('Copy failed'); }
+    });
+    const markBtn = document.createElement('button');
+    markBtn.type = 'button';
+    markBtn.className = 'ghost';
+    const updateMark = () => markBtn.textContent = (item.id && readSet.has(item.id)) ? 'Mark unread' : 'Mark read';
+    updateMark();
+    markBtn.addEventListener('click', () => {
+      if (!item.id) return;
+      if (readSet.has(item.id)) readSet.delete(item.id); else readSet.add(item.id);
+      persistReadSet();
+      card.classList.toggle('read');
+      updateMark();
+    });
+    actions.append(copyBtn, markBtn);
+    summary.appendChild(actions);
+
     const evs = (item.events || []).filter((e) => e && e.start_time);
     if (evs.length) {
       const inline = document.createElement('div');
@@ -332,10 +368,12 @@ function render(items, context, query) {
 }
 
 function filterItems(items, { section, query, eventsOnly }) {
+  const hideRead = !!(hideReadToggle && hideReadToggle.checked);
   return items.filter((item) => {
     const itemSection = normalizeSection(item.section);
     const matchesSection = !section || normalizeSection(section) === itemSection;
     if (!matchesSection) return false;
+    if (hideRead && item.id && readSet.has(item.id)) return false;
     if (eventsOnly) {
       const evs = (item.events || []).filter((e) => e && (e.start_time || e.title));
       if (!evs.length) return false;
@@ -472,6 +510,14 @@ clearSearchBtn.addEventListener('click', () => {
 if (feedTab) feedTab.addEventListener('click', () => switchView('feed'));
 if (eventsTab) eventsTab.addEventListener('click', () => switchView('events'));
 if (eventsOnlyToggle) eventsOnlyToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
+if (hideReadToggle) hideReadToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
+if (markAllReadBtn) markAllReadBtn.addEventListener('click', () => {
+  const date = dateSelect.value || prefs.date;
+  const items = (feedCache.get(date) || {}).items || [];
+  items.forEach((it) => { if (it.id) readSet.add(it.id); });
+  persistReadSet();
+  loadFeed({ forceRefresh: false });
+});
 if (themeToggle) themeToggle.addEventListener('click', () => {
   const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
   applyTheme(next);
