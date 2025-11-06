@@ -1,0 +1,72 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-reddit
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: reddit
+spec:
+  schedule: "*/20 * * * *"  # every 20 minutes
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: reddit
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          containers:
+          - name: reddit
+            image: registry.harbor.lan/library/news-analyzer-scraper:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "scraper.reddit_ingest", "--since", "24", "--limit", "40"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: OPENAI_API_KEY
+            - name: REDDIT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: REDDIT_CLIENT_ID
+                  optional: true
+            - name: REDDIT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: REDDIT_CLIENT_SECRET
+                  optional: true
+            - name: REDDIT_USER_AGENT
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: REDDIT_USER_AGENT
+                  optional: true
+            - name: REDDIT_SUBREDDITS
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: REDDIT_SUBREDDITS
+                  optional: true
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"

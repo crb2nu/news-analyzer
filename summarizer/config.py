@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     minio_secret_key: str = "changeme-strong-secret-key"
     minio_bucket: str = "news-cache"
 
+    # Reddit OAuth configuration
+    reddit_client_id: str | None = None
+    reddit_client_secret: str | None = None
+    reddit_redirect_uri: str | None = None  # e.g., https://news.flexinfer.ai/oauth/reddit/callback
+    reddit_scopes: str = "read identity"
+    reddit_user_agent: str = "news-analyzer/0.1 (by u/localnewsbot)"
+
     class Config:
         env_prefix = ''  # read variables directly
         env_file = '.env'

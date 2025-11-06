@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +35,12 @@ except Exception:
     from utils import extract_json_object
 
 logger = logging.getLogger(__name__)
+
+# OAuth helpers
+try:
+    from .reddit_oauth import build_auth_url, exchange_code_for_tokens, refresh_access_token, new_state
+except Exception:
+    from reddit_oauth import build_auth_url, exchange_code_for_tokens, refresh_access_token, new_state
 
 
 # Pydantic models
@@ -685,6 +691,66 @@ async def get_events(
         key = event['start_time'][:10] if event.get('start_time') else 'unscheduled'
         grouped.setdefault(key, []).append(event)
     return {"days": days, "events": grouped}
+
+# -------- Reddit OAuth endpoints --------
+_oauth_states = set()
+
+
+@app.get("/oauth/reddit/start")
+async def reddit_oauth_start(service: SummarizationService = Depends(get_service)):
+    settings = service.settings
+    if not settings.reddit_client_id or not settings.reddit_redirect_uri:
+        raise HTTPException(status_code=400, detail="Reddit OAuth not configured (client_id/redirect_uri)")
+    state = new_state()
+    _oauth_states.add(state)
+    url = build_auth_url(state, settings)
+    return {"authorize_url": url, "state": state}
+
+
+@app.get("/oauth/reddit/callback")
+async def reddit_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None, service: SummarizationService = Depends(get_service)):
+    if error:
+        return HTMLResponse(f"<h3>Reddit OAuth error:</h3><pre>{html.escape(error)}</pre>")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code/state")
+    if state not in _oauth_states:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    _oauth_states.discard(state)
+
+    try:
+        access, refresh, expires_at = exchange_code_for_tokens(code, service.settings)
+        await service.db_manager.upsert_oauth_token(
+            provider="reddit",
+            account=None,
+            access_token=access,
+            refresh_token=refresh,
+            expires_at=expires_at,
+            scope=service.settings.reddit_scopes,
+        )
+        body = """
+        <html><body style="font-family: system-ui;">
+        <h2>Reddit authorization complete ✅</h2>
+        <p>You can close this window. Tokens were saved.</p>
+        </body></html>
+        """
+        return HTMLResponse(content=body)
+    except Exception as exc:
+        logger.exception("Reddit OAuth exchange failed")
+        raise HTTPException(status_code=500, detail=f"Token exchange failed: {exc}")
+
+
+@app.get("/oauth/reddit/status")
+async def reddit_oauth_status(service: SummarizationService = Depends(get_service)):
+    token = await service.db_manager.get_oauth_token("reddit")
+    if not token:
+        return {"configured": bool(service.settings.reddit_client_id), "authorized": False}
+    safe = {
+        "provider": token.get("provider"),
+        "scope": token.get("scope"),
+        "expires_at": token.get("expires_at").isoformat() if token.get("expires_at") else None,
+        "date_updated": token.get("date_updated").isoformat() if token.get("date_updated") else None,
+    }
+    return {"configured": True, "authorized": True, "token": safe}
 
 
 if __name__ == "__main__":

@@ -81,6 +81,27 @@ spec:
             configMapKeyRef:
               name: news-analyzer-config
               key: OPENAI_MAX_TOKENS
+        # Reddit OAuth
+        - name: REDDIT_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: REDDIT_CLIENT_ID
+              optional: true
+        - name: REDDIT_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: REDDIT_CLIENT_SECRET
+              optional: true
+        - name: REDDIT_USER_AGENT
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: REDDIT_USER_AGENT
+              optional: true
+        - name: REDDIT_REDIRECT_URI
+          value: "https://news.flexinfer.ai/oauth/reddit/callback"
         - name: LOG_LEVEL
           valueFrom:
             configMapKeyRef:

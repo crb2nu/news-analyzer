@@ -483,3 +483,53 @@ class DatabaseManager:
                     'article_title': row['article_title'],
                 })
             return events
+
+    # --- OAuth token storage (for Reddit and others) ---
+    async def ensure_oauth_table(self):
+        sql = """
+        CREATE TABLE IF NOT EXISTS oauth_tokens (
+            id SERIAL PRIMARY KEY,
+            provider TEXT NOT NULL,
+            account TEXT,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            scope TEXT,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            date_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            date_updated TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_oauth_provider ON oauth_tokens(provider, date_updated DESC);
+        """
+        async with self.get_connection() as conn:
+            await conn.execute(sql)
+
+    async def upsert_oauth_token(
+        self,
+        provider: str,
+        account: Optional[str],
+        access_token: str,
+        refresh_token: Optional[str],
+        expires_at: Optional[datetime],
+        scope: Optional[str],
+    ) -> int:
+        await self.ensure_oauth_table()
+        sql = """
+        INSERT INTO oauth_tokens (provider, account, access_token, refresh_token, scope, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+        """
+        async with self.get_connection() as conn:
+            row = await conn.fetchrow(sql, provider, account, access_token, refresh_token, scope, expires_at)
+            return int(row[0])
+
+    async def get_oauth_token(self, provider: str) -> Optional[Dict]:
+        await self.ensure_oauth_table()
+        sql = """
+        SELECT * FROM oauth_tokens
+        WHERE provider = $1
+        ORDER BY date_updated DESC, id DESC
+        LIMIT 1
+        """
+        async with self.get_connection() as conn:
+            row = await conn.fetchrow(sql, provider)
+            return dict(row) if row else None

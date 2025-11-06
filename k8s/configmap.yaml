@@ -32,3 +32,8 @@ data:
   # OpenAI configuration
   OPENAI_MODEL: "qwen3-14b-awq"
   OPENAI_MAX_TOKENS: "1000"
+  
+  # Reddit API configuration (non-secret)
+  REDDIT_USER_AGENT: "news-analyzer/0.1 (by u/localnewsbot)"
+  # Curated SWVA subreddit seed list; override via env if needed
+  REDDIT_SUBREDDITS: "AbingdonVA,BristolVA,BristolTN,Roanoke,Blacksburg,Christiansburg,Virginia,wythecounty"

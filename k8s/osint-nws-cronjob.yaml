@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-nws
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: osint-nws
+spec:
+  schedule: "*/30 * * * *"  # every 30 minutes
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: osint-nws
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          containers:
+          - name: osint-nws
+            image: registry.harbor.lan/library/news-analyzer-scraper:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "scraper.nws_ingest", "--zone", "VAZ022", "--zone", "VAZ023", "--zone", "VAZ024"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "150m"

@@ -112,3 +112,9 @@ class Settings(BaseSettings):
         if not self.facebook_page_ids:
             return []
         return [p.strip() for p in self.facebook_page_ids.split(",") if p.strip()]
+
+    # Reddit API configuration
+    reddit_client_id: str | None = None
+    reddit_client_secret: str | None = None
+    reddit_user_agent: str = "news-analyzer/0.1 (by u/localnewsbot)"
+    reddit_subreddits: str | None = None
