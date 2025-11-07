@@ -86,10 +86,9 @@ async def fetch_articles(db: DatabaseManager, hours: int = 12) -> List[Dict[str,
         return out
 
 
-async def embed_openai(client: AsyncOpenAI, texts: List[str], model: str) -> List[List[float]]:
-    # batch is fine; openai python handles chunking if needed by us
-    resp = await client.embeddings.create(model=model, input=texts)
-    return [d.embedding for d in resp.data]
+async def embed_texts(texts: List[str]) -> List[List[float]]:
+    from embeddings import embed_with_fallback
+    return await embed_with_fallback(texts)
 
 
 def ensure_class_rest(base_url: str) -> None:
@@ -134,22 +133,13 @@ async def main():
             return
 
         # Optional OpenAI embeddings
-        embed_model = os.getenv('OPENAI_EMBED_MODEL')
-        base_url = os.getenv('OPENAI_API_BASE') or settings.openai_api_base
-        embed_client = (
-            AsyncOpenAI(api_key=settings.openai_api_key, base_url=base_url.rstrip('/') if base_url else None)
-            if (embed_model and settings.openai_api_key)
-            else None
-        )
-
         vectors: Optional[List[List[float]]] = None
-        if embed_client:
-            try:
-                texts = [f"{a['title']}\n\n{a['summary'] or a['content'][:2000]}" for a in articles]
-                vectors = await embed_openai(embed_client, texts, embed_model)  # type: ignore[arg-type]
-            except Exception as e:
-                logger.warning("Embedding failed (%s); continuing with BM25 only", e.__class__.__name__)
-                vectors = None
+        try:
+            texts = [f"{a['title']}\n\n{a['summary'] or a['content'][:2000]}" for a in articles]
+            vectors = await embed_texts(texts)
+        except Exception as e:
+            logger.warning("Embedding failed (%s); continuing with BM25 only", e.__class__.__name__)
+            vectors = None
 
         logger.info('Upserting %d articles to Weaviate (vectors=%s)', len(articles), bool(vectors))
         objs = []

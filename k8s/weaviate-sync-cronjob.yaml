@@ -54,6 +54,10 @@ spec:
               value: "http://litellm.ai.svc.cluster.local:8000/v1"
             - name: OPENAI_EMBED_MODEL
               value: "text-embedding-3-small"
+            - name: ENABLE_LOCAL_EMBED
+              value: "true"
+            - name: LOCAL_EMBED_MODEL
+              value: "BAAI/bge-small-en-v1.5"
             # Optional: set OPENAI_EMBED_MODEL to enable vector inserts, e.g. 'text-embedding-3-small'
             # - name: OPENAI_EMBED_MODEL
             #   value: "text-embedding-3-small"

@@ -59,12 +59,9 @@ async def fetch_articles(db: DatabaseManager, hours: int = 12) -> List[Dict[str,
         return out
 
 
-async def embed_texts(base_url: str | None, api_key: str | None, model: str, texts: List[str]) -> List[List[float]]:
-    if not AsyncOpenAI:
-        raise RuntimeError("openai client unavailable")
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url.rstrip('/') if base_url else None)
-    resp = await client.embeddings.create(model=model, input=texts)
-    return [d.embedding for d in resp.data]
+async def embed_texts_with_fallback(texts: List[str]) -> List[List[float]]:
+    from embeddings import embed_with_fallback
+    return await embed_with_fallback(texts)
 
 
 async def main():
@@ -88,11 +85,9 @@ async def main():
             logger.info('No updated summarized articles to sync')
             return
 
-        embed_model = os.getenv('OPENAI_EMBED_MODEL') or 'text-embedding-3-small'
-        embed_base = os.getenv('OPENAI_EMBED_BASE') or os.getenv('OPENAI_API_BASE')
         try:
             texts = [f"{a['title']}\n\n{a['summary'] or a['content'][:2000]}" for a in articles]
-            vectors = await embed_texts(embed_base, settings.openai_api_key, embed_model, texts)
+            vectors = await embed_texts_with_fallback(texts)
         except Exception as e:
             logger.warning('Embedding failed (%s); Qdrant sync skipped', e.__class__.__name__)
             return
@@ -127,4 +122,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-

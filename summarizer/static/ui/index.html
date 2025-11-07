@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>News Analyzer</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; }
+    .row { display: flex; gap: 24px; }
+    .card { flex: 1; border: 1px solid #ddd; padding: 12px 16px; border-radius: 8px; }
+    input[type=text]{ width: 100%; padding: 10px; font-size: 16px; }
+    .item { padding: 8px 0; border-bottom: 1px solid #eee; }
+    .muted { color: #666; font-size: 12px; }
+    a { color: #0b5cff; text-decoration: none; }
+  </style>
+  <script>
+    async function fetchTrending() {
+      const r = await fetch('/analytics/trending?kind=section&limit=10');
+      const data = await r.json();
+      const el = document.getElementById('trending');
+      el.innerHTML = data.map(x => `<div class="item"><strong>${x.key}</strong> <span class="muted">score: ${Number(x.score||0).toFixed(2)}</span></div>`).join('');
+    }
+    async function doSearch(ev){ ev && ev.preventDefault();
+      const q = document.getElementById('q').value.trim(); if(!q) return;
+      const r = await fetch('/search?q='+encodeURIComponent(q));
+      const data = await r.json(); const el = document.getElementById('results');
+      el.innerHTML = data.map(x => `<div class="item"><a href="#" onclick="similar(${x.article_id});return false;">${x.title||'(untitled)'} </a><div class="muted">${x.section||''}</div><div>${(x.summary||'').slice(0,280)}</div></div>`).join('');
+    }
+    async function similar(id){
+      const r = await fetch('/similar?id='+id);
+      const data = await r.json(); const el = document.getElementById('similar');
+      el.innerHTML = '<h3>More like this</h3>' + data.map(x => `<div class="item"><strong>${x.title||'(untitled)'}</strong><div class="muted">${x.section||''}</div><div>${(x.summary||'').slice(0,200)}</div></div>`).join('');
+      window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+    }
+    window.addEventListener('DOMContentLoaded', ()=>{ fetchTrending(); });
+  </script>
+</head>
+<body>
+  <h1>News Analyzer</h1>
+  <form onsubmit="doSearch(event)">
+    <input id="q" type="text" placeholder="Search articles (e.g., school budget)" />
+  </form>
+  <div class="row" style="margin-top:16px">
+    <div class="card">
+      <h3>Trending Sections</h3>
+      <div id="trending"></div>
+    </div>
+    <div class="card">
+      <h3>Results</h3>
+      <div id="results"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div id="similar"></div>
+  </div>
+</body>
+</html>
+

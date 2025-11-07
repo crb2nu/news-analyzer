@@ -378,6 +378,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Serve simple UI
+try:
+    app.mount("/ui", StaticFiles(directory="static/ui", html=True), name="ui")
+except Exception:
+    pass
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
