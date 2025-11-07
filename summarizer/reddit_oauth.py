@@ -7,15 +7,20 @@ from typing import Optional, Tuple
 
 import requests
 
-from .config import Settings
-from .database import DatabaseManager
+try:
+    from .config import Settings
+    from .database import DatabaseManager
+except Exception:
+    from config import Settings
+    from database import DatabaseManager
 
 
 AUTHORIZE_URL = "https://www.reddit.com/api/v1/authorize"
+AUTHORIZE_COMPACT_URL = "https://www.reddit.com/api/v1/authorize.compact"
 TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 
 
-def build_auth_url(state: str, settings: Settings) -> str:
+def build_auth_url(state: str, settings: Settings, compact: bool = False) -> str:
     assert settings.reddit_client_id and settings.reddit_redirect_uri, "Reddit client_id and redirect_uri required"
     params = {
         "client_id": settings.reddit_client_id,
@@ -27,7 +32,8 @@ def build_auth_url(state: str, settings: Settings) -> str:
     }
     # manual encoding to keep spaces
     from urllib.parse import urlencode
-    return f"{AUTHORIZE_URL}?{urlencode(params)}"
+    base = AUTHORIZE_COMPACT_URL if compact else AUTHORIZE_URL
+    return f"{base}?{urlencode(params)}"
 
 
 def _basic_auth_header(client_id: str, client_secret: str | None) -> str:
@@ -79,4 +85,3 @@ def refresh_access_token(refresh_token: str, settings: Settings) -> Tuple[str, O
 
 def new_state() -> str:
     return secrets.token_urlsafe(24)
-

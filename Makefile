@@ -1,9 +1,10 @@
-.PHONY: extractor-run summarizer-run extractor-logs summarizer-logs backfill scrape-range
+.PHONY: extractor-run summarizer-run extractor-logs summarizer-logs backfill scrape-range test-health-access oauth-start-access oauth-status-access
 
 ROOT := $(CURDIR)
 SYS_PYTHON := $(or $(shell command -v python3.13),$(shell command -v python3.12),$(shell command -v python3.11),$(shell command -v python3))
 FORCE_ARG :=$(if $(FORCE), --force,)
 PUBLICATIONS := Smyth County News & Messenger,The News & Press,The Bland County Messenger,The Floyd Press,Wytheville Enterprise,Washington County News
+CF_HOST ?= news.flexinfer.ai
 
 # Kick off the extractor CronJob as an ad-hoc job.
 extractor-run:
@@ -306,4 +307,18 @@ scrape-range:
 	  "  backoffLimit: 0" \
 	  "  ttlSecondsAfterFinished: 86400" \
 	| kubectl apply -f -; \
-	echo "Scraper job $$job created. Tail logs with: kubectl logs -f job/$$job -n news-analyzer"
+echo "Scraper job $$job created. Tail logs with: kubectl logs -f job/$$job -n news-analyzer"
+
+# Quick tests through Cloudflare Access service token (reads CF_ACCESS_CLIENT_ID/SECRET from env)
+# These avoid jq so they won't error on HTML responses; they show status + first lines.
+test-health-access:
+	@echo "==> GET https://$(CF_HOST)/health"; \
+	CF_ACCESS_HOST=$(CF_HOST) scripts/cf-curl.sh -i /health | sed -n '1,40p'
+
+oauth-start-access:
+	@echo "==> GET https://$(CF_HOST)/oauth/reddit/start"; \
+	CF_ACCESS_HOST=$(CF_HOST) scripts/cf-curl.sh -i /oauth/reddit/start | sed -n '1,80p'
+
+oauth-status-access:
+	@echo "==> GET https://$(CF_HOST)/oauth/reddit/status"; \
+	CF_ACCESS_HOST=$(CF_HOST) scripts/cf-curl.sh -i /oauth/reddit/status | sed -n '1,80p'

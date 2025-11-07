@@ -703,8 +703,9 @@ async def reddit_oauth_start(service: SummarizationService = Depends(get_service
         raise HTTPException(status_code=400, detail="Reddit OAuth not configured (client_id/redirect_uri)")
     state = new_state()
     _oauth_states.add(state)
-    url = build_auth_url(state, settings)
-    return {"authorize_url": url, "state": state}
+    url = build_auth_url(state, settings, compact=False)
+    compact_url = build_auth_url(state, settings, compact=True)
+    return {"authorize_url": url, "authorize_url_compact": compact_url, "state": state}
 
 
 @app.get("/oauth/reddit/callback")

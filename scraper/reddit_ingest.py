@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
+import time
 
 from extractor.database import DatabaseManager, StoredArticle
 from extractor.config import Settings as ExtractorSettings
@@ -185,7 +186,9 @@ async def main():
         logger.info("Targeting subreddits: %s", ", ".join(subs))
         cutoff = datetime.now(timezone.utc) - timedelta(hours=args.since)
 
-        for sub in subs:
+        for idx, sub in enumerate(subs):
+            if idx > 0:
+                time.sleep(2)  # stay under Reddit's 1 req / 2s guidance
             items = fetch_subreddit_new(token, scr_settings.reddit_user_agent, sub, args.limit)
             recent = [p for p in items if datetime.fromtimestamp(p.get("created_utc", 0), tz=timezone.utc) >= cutoff]
 
@@ -194,6 +197,7 @@ async def main():
                     cid = p.get("id")
                     if cid and not p.get("selftext"):
                         # add a few comments to flesh out link posts
+                        time.sleep(2)
                         comments = fetch_comments(token, scr_settings.reddit_user_agent, cid)[:3]
                         if comments:
                             p["selftext"] = (p.get("selftext") or "") + "\n\nTop comments:\n- " + "\n- ".join(comments)
@@ -207,4 +211,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
