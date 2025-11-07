@@ -18,8 +18,9 @@ from typing import List
 
 import requests
 
-from extractor.database import DatabaseManager, StoredArticle
-from extractor.config import Settings as ExtractorSettings
+import os
+import json
+import asyncpg
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ def fetch_alerts(zones: List[str]) -> list[dict]:
     return alerts
 
 
+async def _get_pool(db_url: str) -> asyncpg.Pool:
+    return await asyncpg.create_pool(db_url, min_size=1, max_size=5)
+
+
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Ingest NWS active alerts")
@@ -60,12 +65,13 @@ async def main():
         zones = ["VAZ022", "VAZ023", "VAZ024"]
 
     alerts = fetch_alerts(zones)
-    ext_settings = ExtractorSettings()
-    db = DatabaseManager(ext_settings.database_url)
-    await db.initialize()
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise SystemExit("DATABASE_URL is required for nws_ingest")
+    pool = await _get_pool(db_url)
 
     try:
-        articles: list[StoredArticle] = []
+        new_count = 0
         for feat in alerts:
             props = feat.get("properties", {})
             title = props.get("headline") or props.get("event") or "NWS Alert"
@@ -82,35 +88,42 @@ async def main():
                 dt = datetime.now(timezone.utc)
 
             ch = md5((title or "") + body + (url or ""))
-            articles.append(
-                StoredArticle(
-                    id=0,
-                    title=title,
-                    content=body,
-                    content_hash=ch,
-                    url=url,
-                    source_type="osint",
-                    source_url=url,
-                    section="NWS Alerts",
-                    author="NWS",
-                    tags=None,
-                    word_count=len(body.split()),
-                    date_published=dt,
-                    date_extracted=datetime.now(timezone.utc),
-                    raw_html=None,
-                    metadata={"severity": props.get("severity"), "areaDesc": props.get("areaDesc")},
+            metadata = {"severity": props.get("severity"), "areaDesc": props.get("areaDesc")}
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO articles (
+                        title, content, content_hash, url, source_type, source_url,
+                        section, author, tags, word_count, date_published,
+                        date_extracted, processing_status, raw_html, metadata
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6,
+                        $7, $8, $9, $10, $11,
+                        NOW(), 'extracted', NULL, $12
+                    ) ON CONFLICT (content_hash) DO NOTHING
+                    """,
+                    title,
+                    body,
+                    ch,
+                    url,
+                    "osint",
+                    url,
+                    "NWS Alerts",
+                    "NWS",
+                    None,
+                    len(body.split()),
+                    dt,
+                    json.dumps(metadata),
                 )
-            )
+                new_count += 1
 
-        if articles:
-            await db.store_articles(articles, source_identifier="nws-alerts", source_type="osint")
-            logger.info("Stored %d NWS alerts", len(articles))
+        if new_count:
+            logger.info("Stored %d NWS alerts", new_count)
         else:
             logger.info("No NWS alerts")
     finally:
-        await db.close()
+        await pool.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

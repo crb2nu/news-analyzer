@@ -26,8 +26,9 @@ from typing import Any, Dict, List, Optional
 import requests
 import time
 
-from extractor.database import DatabaseManager, StoredArticle
-from extractor.config import Settings as ExtractorSettings
+import os
+import json
+import asyncpg
 from .config import Settings as ScraperSettings
 
 
@@ -43,7 +44,7 @@ def _basic_auth(client_id: str, client_secret: Optional[str]) -> Dict[str, str]:
     return {"Authorization": "Basic " + base64.b64encode(tok).decode()}
 
 
-def get_access_token(settings: ScraperSettings) -> str:
+def get_access_token(settings: ScraperSettings) -> Optional[str]:
     assert settings.reddit_client_id, "REDDIT_CLIENT_ID required"
     headers = {"User-Agent": settings.reddit_user_agent}
     headers.update(_basic_auth(settings.reddit_client_id, settings.reddit_client_secret))
@@ -57,12 +58,18 @@ def get_access_token(settings: ScraperSettings) -> str:
             "scope": "read",
         }
     else:
-        data = {"grant_type": "client_credentials"}
+        # App-only OAuth: include a basic scope to avoid 401 with some app configs
+        data = {"grant_type": "client_credentials", "scope": "read"}
 
-    resp = requests.post(TOKEN_URL, headers=headers, data=data, timeout=20)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Reddit token error {resp.status_code}: {resp.text[:200]}")
-    return resp.json().get("access_token")
+    try:
+        resp = requests.post(TOKEN_URL, headers=headers, data=data, timeout=20)
+        if resp.status_code != 200:
+            logger.warning("Token request failed: %s %s", resp.status_code, resp.text[:120])
+            return None
+        return resp.json().get("access_token")
+    except Exception as exc:
+        logger.warning("Token request error: %s", exc)
+        return None
 
 
 def md5(s: str) -> str:
@@ -86,20 +93,30 @@ def subreddit_list(settings: ScraperSettings) -> List[str]:
     ]
 
 
-def fetch_subreddit_new(access_token: str, user_agent: str, sub: str, limit: int = 50) -> List[Dict[str, Any]]:
-    url = f"{BASE_API}/r/{sub}/new"
-    headers = {"Authorization": f"Bearer {access_token}", "User-Agent": user_agent}
+def fetch_subreddit_new(access_token: Optional[str], user_agent: str, sub: str, limit: int = 50) -> List[Dict[str, Any]]:
+    if access_token:
+        url = f"{BASE_API}/r/{sub}/new"
+        headers = {"Authorization": f"Bearer {access_token}", "User-Agent": user_agent}
+    else:
+        url = f"https://www.reddit.com/r/{sub}/new.json"
+        headers = {"User-Agent": user_agent}
     resp = requests.get(url, headers=headers, params={"limit": str(limit)}, timeout=30)
     if resp.status_code != 200:
         logger.warning("Fetch %s failed: %s", sub, resp.text[:200])
         return []
     data = resp.json()
-    return [i["data"] for i in data.get("data", {}).get("children", [])]
+    # oauth returns Listing in ['data']['children']; .json returns similar
+    children = data.get("data", {}).get("children", [])
+    return [i.get("data", {}) for i in children]
 
 
-def fetch_comments(access_token: str, user_agent: str, post_id: str, limit: int = 50) -> List[str]:
-    url = f"{BASE_API}/comments/{post_id}"
-    headers = {"Authorization": f"Bearer {access_token}", "User-Agent": user_agent}
+def fetch_comments(access_token: Optional[str], user_agent: str, post_id: str, limit: int = 50) -> List[str]:
+    if access_token:
+        url = f"{BASE_API}/comments/{post_id}"
+        headers = {"Authorization": f"Bearer {access_token}", "User-Agent": user_agent}
+    else:
+        url = f"https://www.reddit.com/comments/{post_id}.json"
+        headers = {"User-Agent": user_agent}
     resp = requests.get(url, headers=headers, params={"limit": str(limit), "depth": "1", "sort": "confidence"}, timeout=30)
     if resp.status_code != 200:
         return []
@@ -117,9 +134,13 @@ def fetch_comments(access_token: str, user_agent: str, post_id: str, limit: int 
         return []
 
 
-async def store_posts(posts: List[Dict[str, Any]], sub: str, db: DatabaseManager):
-    # Transform into StoredArticle list
-    articles: List[StoredArticle] = []
+async def _get_pool(db_url: str) -> asyncpg.Pool:
+    return await asyncpg.create_pool(db_url, min_size=1, max_size=5)
+
+
+async def store_posts(posts: List[Dict[str, Any]], sub: str, pool: asyncpg.Pool):
+    # Transform and insert into DB (articles table)
+    new_count = 0
     for p in posts:
         title = p.get("title") or ""
         body = p.get("selftext") or ""
@@ -136,31 +157,42 @@ async def store_posts(posts: List[Dict[str, Any]], sub: str, db: DatabaseManager
 
         # Basic hash for dedupe
         content_hash = md5(title + content + (url or ""))
-        articles.append(
-            StoredArticle(
-                id=0,
-                title=title,
-                content=content,
-                content_hash=content_hash,
-                url=url,
-                source_type="reddit",
-                source_url=url,
-                section=f"Reddit/{sub}",
-                author=p.get("author"),
-                tags=None,
-                word_count=len(content.split()),
-                date_published=created,
-                date_extracted=datetime.now(timezone.utc),
-                raw_html=None,
-                metadata={
-                    "subreddit": sub,
-                    "score": score,
-                    "num_comments": num_comments,
-                },
-            )
-        )
+        metadata = {
+            "subreddit": sub,
+            "score": score,
+            "num_comments": num_comments,
+        }
+        tags_json = None
+        metadata_json = json.dumps(metadata)
 
-    await db.store_articles(articles, source_identifier=f"r/{sub}", source_type="reddit")
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO articles (
+                    title, content, content_hash, url, source_type, source_url,
+                    section, author, tags, word_count, date_published,
+                    date_extracted, processing_status, raw_html, metadata
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9, $10, $11,
+                    NOW(), 'extracted', NULL, $12
+                ) ON CONFLICT (content_hash) DO NOTHING
+                """,
+                title,
+                content,
+                content_hash,
+                url,
+                "reddit",
+                url,
+                f"Reddit/{sub}",
+                p.get("author"),
+                tags_json,
+                len(content.split()),
+                created,
+                metadata_json,
+            )
+            new_count += 1
+    return new_count
 
 
 async def main():
@@ -175,10 +207,17 @@ async def main():
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
-    scr_settings = ScraperSettings()
-    ext_settings = ExtractorSettings()
-    db = DatabaseManager(ext_settings.database_url)
-    await db.initialize()
+    class _Cfg:
+        reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
+        reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+        reddit_user_agent = os.getenv("REDDIT_USER_AGENT", "news-analyzer/0.1 (by u/localnewsbot)")
+        reddit_subreddits = os.getenv("REDDIT_SUBREDDITS")
+
+    scr_settings = _Cfg()
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise SystemExit("DATABASE_URL is required for reddit_ingest")
+    pool = await _get_pool(db_url)
 
     try:
         token = get_access_token(scr_settings)
@@ -202,11 +241,11 @@ async def main():
                         if comments:
                             p["selftext"] = (p.get("selftext") or "") + "\n\nTop comments:\n- " + "\n- ".join(comments)
 
-            await store_posts(recent, sub, db)
+            await store_posts(recent, sub, pool)
 
         logger.info("Reddit ingestion complete")
     finally:
-        await db.close()
+        await pool.close()
 
 
 if __name__ == "__main__":

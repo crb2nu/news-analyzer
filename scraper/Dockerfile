@@ -122,7 +122,7 @@ COPY --from=base /root/.cache/ms-playwright /home/scraper/.cache/ms-playwright
 # Ensure browser binaries are in sync with the current Playwright version
 RUN /app/.venv/bin/playwright install chromium firefox
 
-# Copy application code into a package directory
+# Copy the scraper package (context is the scraper/ directory)
 COPY . /app/scraper
 
 # Create storage directory for session state
