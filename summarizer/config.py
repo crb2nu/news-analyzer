@@ -4,9 +4,9 @@ import random
 import urllib.parse
 
 class Settings(BaseSettings):
-    # E-edition credentials
-    eedition_user: str
-    eedition_pass: str
+    # E-edition credentials (not required for summarizer/analysis)
+    eedition_user: str = ""
+    eedition_pass: str = ""
     
     # SmartProxy configuration (from athena-scraper)
     smartproxy_username: str = 'spua66m4sy'

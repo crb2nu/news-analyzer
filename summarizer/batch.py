@@ -44,12 +44,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class EntityItem(BaseModel):
+    name: str
+    type: str = Field(description="PERSON|ORG|GPE|LOC|EVENT|OTHER")
+
+
+class TopicItem(BaseModel):
+    label: str
+    score: float | None = None
+
+
 class SummaryResponse(BaseModel):
-    """Model for summary response."""
+    """Model for structured summary + taxonomy."""
     summary: str = Field(..., description="Concise summary of the article")
     key_points: List[str] = Field(..., description="Key points from the article")
     sentiment: str = Field(..., description="Overall sentiment: positive, negative, or neutral")
-    topics: List[str] = Field(..., description="Main topics covered in the article")
+    tags: List[str] = Field(default_factory=list, description="Lightweight tags")
+    entities: List[EntityItem] = Field(default_factory=list)
+    topics: List[TopicItem] = Field(default_factory=list)
+    event_dates: List[str] = Field(default_factory=list, description="ISO8601 dates/times mentioned")
     confidence_score: float = Field(default=0.8, ge=0.0, le=1.0)
 
 
@@ -70,18 +83,19 @@ class ArticleSummarizer:
         self.model = settings.openai_model
         self.max_tokens = int(settings.openai_max_tokens)
         
-        # System prompt for local news summarization
-        self.system_prompt = """You are a skilled local news summarizer. Your task is to create concise, accurate summaries of local news articles that help busy residents stay informed about their community.
+        # System prompt for local news summarization + taxonomy extraction
+        self.system_prompt = """You are a skilled local news assistant. Summarize and extract taxonomy for local news.
 
-Guidelines:
-- Focus on key facts, decisions, and impacts on the local community
-- Preserve important names, dates, locations, and numbers
-- Highlight any actions residents should take or be aware of
-- Maintain a neutral, informative tone
-- Keep summaries between 150-250 words
-- Extract 3-5 key points
-- Identify the overall sentiment
-- List 2-4 main topics covered"""
+Instructions:
+- Write a 150-250 word summary focused on key facts and community impact.
+- Extract 3-5 key_points.
+- Provide sentiment (neutral|positive|negative|mixed).
+- Provide 3-6 simple tags (lowercase, hyphenated; e.g., ‘public-safety’, ‘schools’, ‘transport’).
+- List named entities with type (PERSON, ORG, GPE, LOC, EVENT, OTHER).
+- Identify 1-3 topics with optional confidence score (0-1).
+- Extract any explicit event dates/times in ISO8601 if present.
+
+Return only valid JSON matching the provided schema."""
         
         logger.info(f"Initialized ArticleSummarizer with model: {self.model}")
     
@@ -113,7 +127,7 @@ Guidelines:
             content = self._truncate_content(article.content)
             
             # Create the prompt
-            user_prompt = f"""Please summarize this local news article:
+            user_prompt = f"""Please summarize this local news article and extract taxonomy:
 
 Title: {article.title}
 Section: {article.section or 'General'}
@@ -124,10 +138,13 @@ Article Content:
 
 Provide a JSON response with the following structure:
 {{
-    "summary": "150-250 word summary focusing on key facts and community impact",
-    "key_points": ["3-5 bullet points of most important information"],
+    "summary": "...",
+    "key_points": ["..."],
     "sentiment": "neutral|positive|negative|mixed",
-    "topics": ["2-4 main topics covered"],
+    "tags": ["public-safety", "schools"],
+    "entities": [{{"name": "John Smith", "type": "PERSON"}}, {{"name":"Smyth County", "type":"GPE"}}],
+    "topics": [{{"label": "local-government", "score": 0.82}}],
+    "event_dates": ["2025-11-07T19:00:00-05:00"],
     "confidence_score": 0.95
 }}"""
 
@@ -148,14 +165,26 @@ Provide a JSON response with the following structure:
             result_data, used_fallback = extract_json_object(content)
             if used_fallback:
                 logger.warning("Using fallback parser for article %s", article.id)
-
-            return SummaryResponse(
-                summary=result_data.get("summary", ""),
-                key_points=result_data.get("key_points", []),
-                sentiment=result_data.get("sentiment", "neutral"),
-                topics=result_data.get("topics", []),
-                confidence_score=result_data.get("confidence_score", 0.8)
-            )
+            # Coerce into pydantic models with robust defaults
+            try:
+                return SummaryResponse.model_validate(result_data)
+            except Exception:
+                # Backward-compatible mapping if model fails
+                topics_raw = result_data.get("topics", [])
+                topics = [
+                    {"label": t, "score": None} if isinstance(t, str) else t
+                    for t in topics_raw
+                ]
+                return SummaryResponse(
+                    summary=result_data.get("summary", ""),
+                    key_points=result_data.get("key_points", []),
+                    sentiment=result_data.get("sentiment", "neutral"),
+                    tags=[str(t).strip().lower().replace(' ', '-') for t in result_data.get("tags", []) if t],
+                    entities=[EntityItem(**e) for e in result_data.get("entities", []) if isinstance(e, dict) and e.get("name")],
+                    topics=[TopicItem(**t) for t in topics if isinstance(t, dict) and t.get("label")],
+                    event_dates=[d for d in result_data.get("event_dates", []) if isinstance(d, str)],
+                    confidence_score=float(result_data.get("confidence_score", 0.8) or 0.8),
+                )
             
         except Exception as e:
             logger.error(f"Error summarizing article {article.id}: {str(e)}")
@@ -214,7 +243,18 @@ class BatchProcessor:
                     processing_time_ms=processing_time_ms,
                     model_used=self.summarizer.model
                 )
-                
+                # Upsert taxonomy data
+                if summary_response.tags:
+                    await self.db_manager.upsert_article_tags(article.id, summary_response.tags)
+                if summary_response.entities:
+                    ents = [(e.name, e.type) for e in summary_response.entities]
+                    await self.db_manager.upsert_article_entities(article.id, ents)
+                if summary_response.topics:
+                    tops = [(t.label, t.score if t.score is not None else 1.0) for t in summary_response.topics]
+                    await self.db_manager.upsert_article_topics(article.id, tops)
+                if summary_response.event_dates:
+                    await self.db_manager.merge_article_event_dates(article.id, summary_response.event_dates)
+
                 # Update article status
                 await self.db_manager.update_processing_status(article.id, 'summarized')
                 

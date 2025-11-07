@@ -86,7 +86,8 @@ class DatabaseManager:
             max_size=self.pool_size,
             command_timeout=60
         )
-        
+        # Ensure analysis/taxonomy tables exist
+        await self.ensure_analysis_tables()
         logger.info("Database initialized successfully")
     
     async def close(self):
@@ -103,6 +104,171 @@ class DatabaseManager:
         
         async with self.pool.acquire() as connection:
             yield connection
+
+    # ---------- Analysis / Taxonomy schema ----------
+    async def ensure_analysis_tables(self) -> None:
+        """Create taxonomy and analysis tables if not present."""
+        sql = """
+        CREATE TABLE IF NOT EXISTS entities (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'OTHER',
+            date_created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (name, type)
+        );
+
+        CREATE TABLE IF NOT EXISTS article_entities (
+            article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+            entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            count INTEGER NOT NULL DEFAULT 1,
+            salience REAL,
+            PRIMARY KEY (article_id, entity_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS article_tags (
+            article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (article_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_article_tags_tag ON article_tags(tag);
+
+        CREATE TABLE IF NOT EXISTS topics (
+            id SERIAL PRIMARY KEY,
+            label TEXT NOT NULL UNIQUE,
+            description TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS article_topics (
+            article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+            topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+            score REAL DEFAULT 1.0,
+            PRIMARY KEY (article_id, topic_id)
+        );
+
+        -- Daily aggregations for timeline/trends
+        CREATE TABLE IF NOT EXISTS daily_metrics (
+            metric_date DATE NOT NULL,
+            kind TEXT NOT NULL,         -- 'tag'|'entity'|'topic'|'section'
+            key TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            sum_score REAL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (metric_date, kind, key)
+        );
+
+        CREATE TABLE IF NOT EXISTS trending_items (
+            metric_date DATE NOT NULL,
+            kind TEXT NOT NULL,
+            key TEXT NOT NULL,
+            score REAL NOT NULL,
+            zscore REAL,
+            win_size INTEGER NOT NULL DEFAULT 7,
+            delta REAL,
+            details JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (metric_date, kind, key)
+        );
+
+        CREATE TABLE IF NOT EXISTS trend_forecasts (
+            date_generated DATE NOT NULL,
+            kind TEXT NOT NULL,
+            key TEXT NOT NULL,
+            horizon_days INTEGER NOT NULL,
+            forecast JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (date_generated, kind, key, horizon_days)
+        );
+        """
+        async with self.get_connection() as conn:
+            await conn.execute(sql)
+
+    # ---------- Upserts for taxonomy ----------
+    async def upsert_article_tags(self, article_id: int, tags: List[str]) -> None:
+        tags = [t.strip().lower() for t in tags if t and isinstance(t, str)]
+        if not tags:
+            return
+        async with self.get_connection() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM article_tags WHERE article_id = $1", article_id)
+                for tag in tags:
+                    await conn.execute(
+                        "INSERT INTO article_tags(article_id, tag) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                        article_id,
+                        tag,
+                    )
+
+    async def upsert_article_entities(self, article_id: int, entities: List[tuple[str, str]]) -> None:
+        if not entities:
+            return
+        async with self.get_connection() as conn:
+            async with conn.transaction():
+                # Remove previous mapping to keep current view
+                await conn.execute("DELETE FROM article_entities WHERE article_id = $1", article_id)
+                for name, etype in entities:
+                    name_norm = name.strip()
+                    etype_norm = (etype or 'OTHER').strip().upper()
+                    row = await conn.fetchrow(
+                        "INSERT INTO entities(name, type) VALUES($1,$2) ON CONFLICT(name,type) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+                        name_norm,
+                        etype_norm,
+                    )
+                    ent_id = int(row['id'])
+                    await conn.execute(
+                        "INSERT INTO article_entities(article_id, entity_id, count) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+                        article_id,
+                        ent_id,
+                        1,
+                    )
+
+    async def upsert_article_topics(self, article_id: int, topics: List[tuple[str, float]]) -> None:
+        if not topics:
+            return
+        async with self.get_connection() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM article_topics WHERE article_id = $1", article_id)
+                for label, score in topics:
+                    lbl = label.strip().lower()
+                    row = await conn.fetchrow(
+                        "INSERT INTO topics(label) VALUES($1) ON CONFLICT(label) DO UPDATE SET label=EXCLUDED.label RETURNING id",
+                        lbl,
+                    )
+                    topic_id = int(row['id'])
+                    await conn.execute(
+                        "INSERT INTO article_topics(article_id, topic_id, score) VALUES($1,$2,$3) ON CONFLICT(article_id,topic_id) DO UPDATE SET score = EXCLUDED.score",
+                        article_id,
+                        topic_id,
+                        float(score or 1.0),
+                    )
+
+    async def merge_article_event_dates(self, article_id: int, iso_dates: List[str]) -> None:
+        if not iso_dates:
+            return
+        # Merge into articles.event_dates JSONB and also normalize into article_events table with generic titles
+        async with self.get_connection() as conn:
+            # Merge JSONB list
+            old_row = await conn.fetchrow("SELECT event_dates FROM articles WHERE id=$1", article_id)
+            try:
+                existing = json.loads(old_row['event_dates']) if old_row and old_row['event_dates'] else []
+            except Exception:
+                existing = []
+            merged = sorted(set(existing + iso_dates))
+            await conn.execute("UPDATE articles SET event_dates = $1 WHERE id = $2", json.dumps(merged), article_id)
+            # Insert normalized events if not already present
+            for d in iso_dates:
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO article_events(article_id, title, description, start_time)
+                        VALUES($1, $2, $3, $4::timestamptz)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        article_id,
+                        'Event mentioned in article',
+                        None,
+                        d,
+                    )
+                except Exception:
+                    continue
     
     async def get_articles_for_processing(self, 
                                         processing_status: str = 'extracted',

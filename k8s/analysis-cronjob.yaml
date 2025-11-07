@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-analysis
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: analysis
+spec:
+  schedule: "10 * * * *"  # hourly at :10
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: analysis
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          containers:
+          - name: analysis
+            image: registry.harbor.lan/library/news-analyzer-summarizer:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "analysis", "--window", "7", "--days", "3"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: OPENAI_API_KEY
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"

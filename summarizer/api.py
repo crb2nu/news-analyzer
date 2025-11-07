@@ -390,6 +390,50 @@ def get_service() -> SummarizationService:
         raise HTTPException(status_code=503, detail="Service not initialized")
     return _service
 
+# ---- Analytics endpoints (for UI charts) ----
+@app.get("/analytics/trending")
+async def get_trending(kind: str = "section", date_str: Optional[str] = None, limit: int = 20):
+    """Top trending items for a given day and kind.
+
+    kind: section|tag|entity|topic
+    """
+    if _service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    dm = _service.db_manager
+    target_date = (date.fromisoformat(date_str) if date_str else date.today())
+    sql = """
+        SELECT kind, key, score, zscore, details
+        FROM trending_items
+        WHERE metric_date = $1 AND kind = $2
+        ORDER BY COALESCE(ABS(zscore),0) DESC, score DESC
+        LIMIT $3
+    """
+    async with dm.get_connection() as conn:
+        rows = await conn.fetch(sql, target_date, kind, limit)
+        return [{
+            'kind': r['kind'], 'key': r['key'], 'score': r['score'],
+            'zscore': r['zscore'], 'details': r['details']
+        } for r in rows]
+
+
+@app.get("/analytics/timeline")
+async def get_timeline(kind: str, key: str, days: int = 30):
+    """Daily counts for a series, used for timelines and sparklines."""
+    if _service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    dm = _service.db_manager
+    sql = """
+        SELECT metric_date, count, sum_score
+        FROM daily_metrics
+        WHERE kind = $1 AND key = $2 AND metric_date >= CURRENT_DATE - ($3::text || ' days')::interval
+        ORDER BY metric_date
+    """
+    async with dm.get_connection() as conn:
+        rows = await conn.fetch(sql, kind, key, days)
+        return [{
+            'date': r['metric_date'].isoformat(), 'count': r['count'], 'sum_score': r['sum_score']
+        } for r in rows]
+
 
 def build_source_page(article: Dict) -> str:
     title = html.escape(article.get('title') or 'Article')
