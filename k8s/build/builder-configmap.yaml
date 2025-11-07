@@ -8,7 +8,6 @@ metadata:
     component: builder
 data:
   # Set this to your repo URL (HTTPS or SSH). For private SSH, create a secret and see README.
-  GIT_URL: "https://github.com/REPLACE_ME/news-analyzer.git"
+  GIT_URL: "https://github.com/crb2nu/news-analyzer.git"
   GIT_REF: "main"
   REGISTRY_PREFIX: "registry.harbor.lan/library/news-analyzer"
-

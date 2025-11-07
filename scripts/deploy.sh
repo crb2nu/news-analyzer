@@ -70,18 +70,7 @@ cleanup_jobs() {
     [[ -n "$name" ]] && to_delete+=("$name")
   done < <(kubens get jobs -o jsonpath='{range .items[?(@.status.failed>=1)]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 
-  # Deduplicate job names (a job may match succeeded and failed filters edge-case)
-  if [[ ${#to_delete[@]} -gt 0 ]]; then
-    local uniq_jobs=()
-    declare -A seen_jobs=()
-    for job in "${to_delete[@]}"; do
-      if [[ -n "$job" && -z "${seen_jobs[$job]:-}" ]]; then
-        uniq_jobs+=("$job")
-        seen_jobs[$job]=1
-      fi
-    done
-    to_delete=("${uniq_jobs[@]}")
-  fi
+  # Best-effort: duplicates are fine; deletions are ignore-not-found
 
   if [[ ${#to_delete[@]} -eq 0 ]]; then
     log "No completed Jobs to delete"
@@ -113,17 +102,7 @@ cleanup_pods() {
     [[ -n "$name" ]] && pods+=("$name")
   done < <(kubens get pods -l run -o jsonpath='{range .items}{.metadata.name}{"\n"}{end}' || true)
 
-  if [[ ${#pods[@]} -gt 0 ]]; then
-    local uniq_pods=()
-    declare -A seen_pods=()
-    for pod in "${pods[@]}"; do
-      if [[ -n "$pod" && -z "${seen_pods[$pod]:-}" ]]; then
-        uniq_pods+=("$pod")
-        seen_pods[$pod]=1
-      fi
-    done
-    pods=("${uniq_pods[@]}")
-  fi
+  # Best-effort: duplicates are fine
 
   if [[ ${#pods[@]} -eq 0 ]]; then
     log "No stray pods to delete"
@@ -279,10 +258,31 @@ apply_app() {
   kubens apply -f k8s/extractor-cronjob.yaml
   kubens apply -f k8s/summarizer-deployment.yaml
   kubens apply -f k8s/notifier-cronjob.yaml || true
+  # Ingress for summarizer (public API + OAuth callbacks)
+  [[ -f k8s/summarizer-ingress.yaml ]] && kubens apply -f k8s/summarizer-ingress.yaml || true
 
   log "Waiting for summarizer deployment (up to 60s)"
   kubens rollout status deployment/news-analyzer-summarizer --timeout=60s \
     || warn "Summarizer not ready yet; images may be missing. Continuing to builders."
+}
+
+# Apply new external sources: Reddit + NWS (OSINT)
+apply_sources() {
+  log "Applying external source ingesters (Reddit, NWS)"
+  local applied_nws_cron="true"
+  if [[ -f k8s/reddit-cronjob.yaml ]]; then
+    kubens apply -f k8s/reddit-cronjob.yaml || warn "Reddit CronJob apply returned non-zero"
+  else
+    warn "k8s/reddit-cronjob.yaml not found; skipping"
+  fi
+  if [[ -f k8s/osint-nws-cronjob.yaml ]]; then
+    if ! kubens apply -f k8s/osint-nws-cronjob.yaml; then
+      warn "NWS CronJob apply failed (quota or other). Will fall back to one-off Job when triggering."
+      applied_nws_cron="false"
+    fi
+  fi
+  # Save a hint for trigger step
+  export _DEPLOY_NWS_CRON_APPLIED="$applied_nws_cron"
 }
 
 # Set observability envs on workloads so recent metrics/logging changes are active
@@ -458,6 +458,48 @@ trigger_pipeline() {
   if kubens get cronjob/news-analyzer-summarizer-batch >/dev/null 2>&1; then
     kubens create job --from=cronjob/news-analyzer-summarizer-batch sum-${ts} || true
   fi
+  # reddit (external source)
+  if kubens get cronjob/news-analyzer-reddit >/dev/null 2>&1; then
+    kubens create job --from=cronjob/news-analyzer-reddit reddit-${ts} || true
+  fi
+  # nws (external source) – use CronJob if present, else synthesize a one-off Job
+  if kubens get cronjob/news-analyzer-nws >/dev/null 2>&1; then
+    kubens create job --from=cronjob/news-analyzer-nws nws-${ts} || true
+  else
+    warn "NWS CronJob missing; creating one-off Job"
+    kubens apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nws-${ts}
+  namespace: ${NAMESPACE}
+  labels:
+    app: news-analyzer
+    component: osint-nws
+spec:
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: osint-nws
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+      - name: ${HARBOR_SECRET_NAME}
+      containers:
+      - name: osint-nws
+        image: ${REGISTRY_PREFIX}-scraper:latest
+        imagePullPolicy: Always
+        command: ["python", "-m", "scraper.nws_ingest", "--zone", "VAZ022", "--zone", "VAZ023", "--zone", "VAZ024", "-v"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: DATABASE_URL
+  backoffLimit: 0
+EOF
+  fi
   # notifier is optional; enable if you want immediate digest
   if kubens get cronjob/news-analyzer-notifier >/dev/null 2>&1; then
     kubens create job --from=cronjob/news-analyzer-notifier notify-${ts} || true
@@ -474,6 +516,7 @@ main() {
   ensure_harbor_pull_secret
   apply_base
   apply_app
+  apply_sources
   patch_observability_env
   verify_observability_env
   apply_ops_and_build

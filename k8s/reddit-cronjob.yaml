@@ -29,6 +29,11 @@ spec:
             imagePullPolicy: Always
             command: ["python", "-m", "scraper.reddit_ingest", "--since", "24", "--limit", "40"]
             env:
+            - name: REDDIT_APP_TYPE
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: REDDIT_APP_TYPE
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -50,6 +55,18 @@ spec:
                 secretKeyRef:
                   name: news-analyzer-secrets
                   key: REDDIT_CLIENT_SECRET
+                  optional: true
+            - name: REDDIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: REDDIT_USERNAME
+                  optional: true
+            - name: REDDIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: REDDIT_PASSWORD
                   optional: true
             - name: REDDIT_USER_AGENT
               valueFrom:
