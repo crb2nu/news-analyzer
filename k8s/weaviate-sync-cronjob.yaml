@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-weaviate-sync
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: weaviate-sync
+spec:
+  schedule: "*/30 * * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: weaviate-sync
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: harbor-regcred
+          containers:
+          - name: weaviate-sync
+            image: registry.harbor.lan/library/news-analyzer-summarizer:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "weaviate_sync", "--hours", "12"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: OPENAI_API_KEY
+            - name: WEAVIATE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: WEAVIATE_URL
+            - name: WEAVIATE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: news-analyzer-secrets
+                  key: WEAVIATE_API_KEY
+                  optional: true
+            - name: OPENAI_API_BASE
+              value: "http://litellm.ai.svc.cluster.local:8000/v1"
+            - name: OPENAI_EMBED_MODEL
+              value: "text-embedding-3-small"
+            # Optional: set OPENAI_EMBED_MODEL to enable vector inserts, e.g. 'text-embedding-3-small'
+            # - name: OPENAI_EMBED_MODEL
+            #   value: "text-embedding-3-small"
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
