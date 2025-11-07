@@ -81,6 +81,32 @@ spec:
             configMapKeyRef:
               name: news-analyzer-config
               key: OPENAI_MAX_TOKENS
+        - name: OPENAI_EMBED_BASE
+          value: "http://litellm.ai.svc.cluster.local:8000/v1"
+        - name: OPENAI_EMBED_MODEL
+          value: "text-embedding-3-small"
+        - name: QDRANT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: QDRANT_URL
+        - name: QDRANT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: QDRANT_API_KEY
+              optional: true
+        - name: WEAVIATE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: WEAVIATE_URL
+        - name: WEAVIATE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: WEAVIATE_API_KEY
+              optional: true
         # Reddit OAuth
         - name: REDDIT_CLIENT_ID
           valueFrom:

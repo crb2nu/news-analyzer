@@ -19,6 +19,7 @@ uvicorn = "^0.24.0"
 minio = "^7.2.0"
 requests = "^2.31.0"
 weaviate-client = "^4.6.3"
+qdrant-client = "^1.9.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"

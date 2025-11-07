@@ -22,6 +22,10 @@ from openai import AsyncOpenAI
 from minio import Minio
 from minio.error import S3Error
 import html
+import os
+import json as _json
+import requests as _requests
+import uuid as _uuid
 
 try:
     # When running as a package (e.g., python -m summarizer.api)
@@ -390,6 +394,35 @@ def get_service() -> SummarizationService:
         raise HTTPException(status_code=503, detail="Service not initialized")
     return _service
 
+# ---- Weaviate helpers ----
+def _wv_headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    api_key = os.getenv("WEAVIATE_API_KEY")
+    if api_key:
+        h["Authorization"] = f"Bearer {api_key}"
+        h["X-API-KEY"] = api_key
+    return h
+
+def _wv_url() -> str:
+    u = os.getenv("WEAVIATE_URL")
+    if not u:
+        raise HTTPException(status_code=500, detail="WEAVIATE_URL not configured")
+    return u.rstrip('/')
+
+def _gql(query: str) -> dict:
+    url = _wv_url() + "/v1/graphql"
+    resp = _requests.post(url, headers=_wv_headers(), json={"query": query}, timeout=20)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Weaviate error {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    if "errors" in data:
+        raise HTTPException(status_code=502, detail=_json.dumps(data["errors"]))
+    return data["data"]
+
+def _escape_graphql_string(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+# ---- Analytics endpoints (for UI charts) ----
 # ---- Analytics endpoints (for UI charts) ----
 @app.get("/analytics/trending")
 async def get_trending(kind: str = "section", date_str: Optional[str] = None, limit: int = 20):
@@ -433,6 +466,123 @@ async def get_timeline(kind: str, key: str, days: int = 30):
         return [{
             'date': r['metric_date'].isoformat(), 'count': r['count'], 'sum_score': r['sum_score']
         } for r in rows]
+
+
+# ---- Search endpoints (Weaviate) ----
+@app.get("/search")
+async def search(q: str, limit: int = 20):
+    q_esc = _escape_graphql_string(q)
+    gql = f"""
+    {{
+      Get {{
+        Article(
+          bm25: {{ query: \"{q_esc}\", properties: [\"title\",\"summary\",\"content\"] }}
+          limit: {max(1, min(limit, 50))}
+        ) {{
+          article_id
+          title
+          section
+          summary
+          _additional {{ score }}
+        }}
+      }}
+    }}
+    """
+    data = _gql(gql)
+    items = data.get("Get", {}).get("Article", [])
+    return [
+        {
+            "article_id": it.get("article_id"),
+            "title": it.get("title"),
+            "section": it.get("section"),
+            "summary": it.get("summary"),
+            "score": (it.get("_additional") or {}).get("score"),
+        }
+        for it in items
+    ]
+
+
+@app.get("/similar")
+async def similar(id: int, limit: int = 10):
+    # Try vector nearObject if available; else fall back to BM25 using the article's text
+    wid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"article:{id}"))
+    lim = max(1, min(limit, 50))
+    # Attempt nearObject
+    try:
+        gql = f"""
+        {{
+          Get {{
+            Article(
+              nearObject: {{ id: \"{wid}\" }}
+              limit: {lim}
+            ) {{
+              article_id
+              title
+              section
+              summary
+              _additional {{ distance }}
+            }}
+          }}
+        }}
+        """
+        data = _gql(gql)
+        items = data.get("Get", {}).get("Article", [])
+        # Filter out self if present
+        out = []
+        for it in items:
+            if it.get("article_id") == id:
+                continue
+            out.append({
+                "article_id": it.get("article_id"),
+                "title": it.get("title"),
+                "section": it.get("section"),
+                "summary": it.get("summary"),
+                "distance": (it.get("_additional") or {}).get("distance"),
+            })
+        if out:
+            return out
+    except HTTPException:
+        pass
+
+    # Fallback to BM25 using the article content
+    if _service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    dm = _service.db_manager
+    art = await dm.get_article_by_id(id)
+    if not art:
+        raise HTTPException(status_code=404, detail="Article not found")
+    text = (art.get('title') or '') + "\n\n" + (art.get('summary_text') or art.get('content') or '')
+    q_esc = _escape_graphql_string(text[:1500])
+    gql2 = f"""
+    {{
+      Get {{
+        Article(
+          bm25: {{ query: \"{q_esc}\", properties: [\"title\",\"summary\",\"content\"] }}
+          limit: {lim}
+        ) {{
+          article_id
+          title
+          section
+          summary
+          _additional {{ score }}
+        }}
+      }}
+    }}
+    """
+    data2 = _gql(gql2)
+    items2 = data2.get("Get", {}).get("Article", [])
+    out2 = []
+    for it in items2:
+        if it.get("article_id") == id:
+            continue
+        out2.append({
+            "article_id": it.get("article_id"),
+            "title": it.get("title"),
+            "section": it.get("section"),
+            "summary": it.get("summary"),
+            "score": (it.get("_additional") or {}).get("score"),
+        })
+    return out2
 
 
 def build_source_page(article: Dict) -> str:
