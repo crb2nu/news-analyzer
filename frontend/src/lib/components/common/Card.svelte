@@ -11,7 +11,7 @@
 
 <div
 	class={cn(
-		'bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 transition-all duration-200',
+		'bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 transition-[box-shadow,transform,border-color] duration-200',
 		padding && 'p-6',
 		elevated ? 'shadow-md hover:shadow-lg' : 'shadow-sm',
 		hoverable && 'hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 dark:hover:border-slate-600 cursor-pointer',

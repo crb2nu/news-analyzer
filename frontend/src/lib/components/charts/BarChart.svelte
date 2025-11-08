@@ -30,7 +30,7 @@
 	$: barHeight = horizontal ? (yScale.bandwidth ? yScale.bandwidth() : 20) : 0;
 </script>
 
-<div class="bar-chart">
+<div class="w-full">
 	{#if title}
 		<h3 class="text-sm font-semibold mb-3 text-slate-700 dark:text-slate-300">{title}</h3>
 	{/if}
@@ -38,7 +38,7 @@
 	{#if data.length > 0}
 		{#if horizontal}
 			<!-- Horizontal bars - auto height -->
-			<div class="flex flex-col gap-2 py-2">
+			<div class="flex flex-col gap-3 w-full min-h-0">
 				{#each data as item, i}
 					<div class="flex items-center gap-3">
 						<div class="w-24 text-xs text-right text-slate-600 dark:text-slate-400 truncate">
@@ -92,9 +92,3 @@
 		</div>
 	{/if}
 </div>
-
-<style>
-	.bar-chart {
-		width: 100%;
-	}
-</style>
