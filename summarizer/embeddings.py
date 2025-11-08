@@ -15,7 +15,8 @@ _local_model = None
 async def embed_openai(texts: List[str], api_key: str, base_url: Optional[str], model: str) -> List[List[float]]:
     if not AsyncOpenAI:
         raise RuntimeError("openai client unavailable")
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url.rstrip('/') if base_url else None)
+    default_headers = {"X-API-KEY": api_key}  # helps with LiteLLM setups that expect X-API-KEY
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url.rstrip('/') if base_url else None, default_headers=default_headers)
     resp = await client.embeddings.create(model=model, input=texts)
     return [d.embedding for d in resp.data]
 
@@ -59,4 +60,3 @@ async def embed_with_fallback(texts: List[str]) -> List[List[float]]:
 
     # Local fallback
     return await embed_local(texts, local_name)
-

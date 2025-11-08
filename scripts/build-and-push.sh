@@ -113,7 +113,8 @@ build_component() {
       dockerfile="extractor/Dockerfile"
       ;;
     summarizer)
-      context="summarizer"
+      # Summarizer needs full context for frontend build
+      context="."
       dockerfile="summarizer/Dockerfile"
       ;;
     notifier)

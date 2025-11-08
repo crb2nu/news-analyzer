@@ -92,6 +92,9 @@ class SummarizationService:
         client_kwargs = {"api_key": settings.openai_api_key}
         if settings.openai_api_base:
             client_kwargs["base_url"] = settings.openai_api_base.rstrip("/")
+        # Add X-API-KEY for LiteLLM compatibility (in addition to Authorization)
+        if settings.openai_api_key:
+            client_kwargs["default_headers"] = {"X-API-KEY": settings.openai_api_key}
         self.client = AsyncOpenAI(**client_kwargs)
         self.db_manager = DatabaseManager(settings.database_url)
         self.minio_bucket = settings.minio_bucket
@@ -378,11 +381,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Serve simple UI
-try:
-    app.mount("/ui", StaticFiles(directory="static/ui", html=True), name="ui")
-except Exception:
-    pass
+# Note: Frontend SPA handler will be registered at the end of this file after all API routes
 
 # Add CORS middleware
 app.add_middleware(
@@ -426,7 +425,13 @@ def _gql(query: str) -> dict:
     return data["data"]
 
 def _escape_graphql_string(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("\"", "\\\"")
+    # Escape backslashes and quotes; collapse newlines to spaces to avoid syntax errors
+    return (
+        s.replace("\\", "\\\\")
+         .replace("\"", "\\\"")
+         .replace("\n", " ")
+         .replace("\r", " ")
+    )
 
 # ---- Analytics endpoints (for UI charts) ----
 # ---- Analytics endpoints (for UI charts) ----
@@ -464,7 +469,8 @@ async def get_timeline(kind: str, key: str, days: int = 30):
     sql = """
         SELECT metric_date, count, sum_score
         FROM daily_metrics
-        WHERE kind = $1 AND key = $2 AND metric_date >= CURRENT_DATE - ($3::text || ' days')::interval
+        WHERE kind = $1 AND key = $2
+          AND metric_date >= CURRENT_DATE - make_interval(days => $3::int)
         ORDER BY metric_date
     """
     async with dm.get_connection() as conn:
@@ -510,43 +516,55 @@ async def search(q: str, limit: int = 20):
 
 @app.get("/similar")
 async def similar(id: int, limit: int = 10):
-    # Try vector nearObject if available; else fall back to BM25 using the article's text
-    wid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"article:{id}"))
+    # Try vector nearObject using the object's internal UUID
     lim = max(1, min(limit, 50))
-    # Attempt nearObject
     try:
-        gql = f"""
+        # First, find the object's internal uuid by article_id
+        q_uuid = f"""
         {{
           Get {{
-            Article(
-              nearObject: {{ id: \"{wid}\" }}
-              limit: {lim}
-            ) {{
-              article_id
-              title
-              section
-              summary
-              _additional {{ distance }}
+            Article(where: {{ path:[\"article_id\"], operator: Equal, valueInt: {id} }}, limit:1) {{
+              _additional {{ id }}
             }}
           }}
         }}
         """
-        data = _gql(gql)
-        items = data.get("Get", {}).get("Article", [])
-        # Filter out self if present
-        out = []
-        for it in items:
-            if it.get("article_id") == id:
-                continue
-            out.append({
-                "article_id": it.get("article_id"),
-                "title": it.get("title"),
-                "section": it.get("section"),
-                "summary": it.get("summary"),
-                "distance": (it.get("_additional") or {}).get("distance"),
-            })
-        if out:
-            return out
+        d0 = _gql(q_uuid)
+        hits = d0.get("Get", {}).get("Article", [])
+        if hits:
+            oid = hits[0].get("_additional", {}).get("id")
+            if oid:
+                gql = f"""
+                {{
+                  Get {{
+                    Article(
+                      nearObject: {{ id: \"{oid}\" }}
+                      limit: {lim}
+                    ) {{
+                      article_id
+                      title
+                      section
+                      summary
+                      _additional {{ distance }}
+                    }}
+                  }}
+                }}
+                """
+                data = _gql(gql)
+                items = data.get("Get", {}).get("Article", [])
+                out = []
+                for it in items:
+                    if it.get("article_id") == id:
+                        continue
+                    out.append({
+                        "article_id": it.get("article_id"),
+                        "title": it.get("title"),
+                        "section": it.get("section"),
+                        "summary": it.get("summary"),
+                        "distance": (it.get("_additional") or {}).get("distance"),
+                    })
+                if out:
+                    return out
     except HTTPException:
         pass
 
@@ -719,13 +737,14 @@ def build_source_page(article: Dict) -> str:
 """
     return template
 
-# API Routes
-@app.get("/")
-async def serve_index():
-    """Serve the simple frontend index page with no-cache headers."""
-    path = str((__file__).replace("api.py", "static/index.html"))
-    headers = {"Cache-Control": "no-store, max-age=0"}
-    return FileResponse(path=path, headers=headers)
+# Root redirect removed - handled by SPA serve_spa function above
+
+# Favicon handler (avoid 404s when browsers request /favicon.ico)
+@app.get("/favicon.ico")
+async def favicon():
+    path = str((__file__).replace("api.py", "static/favicon.svg"))
+    headers = {"Cache-Control": "public, max-age=86400"}
+    return FileResponse(path=path, headers=headers, media_type="image/svg+xml")
 
 # Mount static assets (JS/CSS)
 app.mount(
@@ -952,6 +971,54 @@ async def reddit_oauth_status(service: SummarizationService = Depends(get_servic
         "date_updated": token.get("date_updated").isoformat() if token.get("date_updated") else None,
     }
     return {"configured": True, "authorized": True, "token": safe}
+
+
+# -------- Frontend SPA Serving (must be last to not interfere with API routes) --------
+# Try to find the UI directory
+ui_paths = [
+    Path(__file__).parent / "static" / "ui",  # Docker build location
+    Path(__file__).parent.parent / "frontend" / "build",  # Local dev location
+]
+
+ui_dir = None
+for path in ui_paths:
+    if path.exists() and path.is_dir():
+        ui_dir = str(path)
+        logger.info(f"Serving UI from: {ui_dir}")
+        break
+
+if ui_dir:
+    try:
+        # Serve the main app at / (fallback to 200.html for client-side routing)
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            """Serve SvelteKit SPA with client-side routing."""
+            # Skip API routes (they're already registered above)
+            if full_path.startswith(("feed", "search", "similar", "analytics", "events", "articles", "health", "summarize", "stats", "oauth")):
+                raise HTTPException(status_code=404, detail="Not found")
+
+            # Serve static files directly
+            file_path = Path(ui_dir) / full_path
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(file_path)
+
+            # Fallback to 200.html for SPA routing
+            fallback = Path(ui_dir) / "200.html"
+            if fallback.exists():
+                return FileResponse(fallback, media_type="text/html")
+
+            # Final fallback to index.html
+            index = Path(ui_dir) / "index.html"
+            if index.exists():
+                return FileResponse(index, media_type="text/html")
+
+            raise HTTPException(status_code=404, detail="Not found")
+
+        logger.info("Frontend SPA routing enabled")
+    except Exception as e:
+        logger.warning(f"Failed to mount UI: {e}")
+else:
+    logger.warning("UI directory not found; frontend will not be available")
 
 
 if __name__ == "__main__":

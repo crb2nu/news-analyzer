@@ -11,6 +11,7 @@ const eventsOnlyToggle = $('#eventsOnlyToggle');
 const hideReadToggle = $('#hideReadToggle');
 const markAllReadBtn = $('#markAllReadBtn');
 const sectionChips = $('#sectionChips');
+const feedControls = $('#feedControls');
 const eventsPanel = $('#eventsPanel');
 const eventsList = $('#eventsList');
 // Discover view elements
@@ -108,40 +109,50 @@ function setLastUpdated(ts = null) {
   lastUpdatedEl.textContent = `Updated ${dt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
 }
 
-function switchView(view) {
-  if (view === activeView) return;
-  activeView = view;
-  savePrefs({ view });
-  if (view === 'feed') {
-    feedEl.hidden = false;
-    eventsPanel.hidden = true;
-    discoverPanel.hidden = true;
-    feedTab.classList.add('active');
-    feedTab.setAttribute('aria-selected', 'true');
-    eventsTab.classList.remove('active');
-    eventsTab.setAttribute('aria-selected', 'false');
-    if (discoverTab) { discoverTab.classList.remove('active'); discoverTab.setAttribute('aria-selected','false'); }
-    setStatus('Showing article feed');
-  } else {
-    if (view === 'events') {
-      feedEl.hidden = true; discoverPanel.hidden = true; eventsPanel.hidden = false;
-      feedTab.classList.remove('active'); feedTab.setAttribute('aria-selected','false');
-      eventsTab.classList.add('active'); eventsTab.setAttribute('aria-selected','true');
-      if (discoverTab) { discoverTab.classList.remove('active'); discoverTab.setAttribute('aria-selected','false'); }
-      loadEvents().catch((err) => setStatus(`Error loading events: ${err.message}`));
-    } else if (view === 'discover') {
-      feedEl.hidden = true; eventsPanel.hidden = true; discoverPanel.hidden = false;
-      feedTab.classList.remove('active'); feedTab.setAttribute('aria-selected','false');
-      eventsTab.classList.remove('active'); eventsTab.setAttribute('aria-selected','false');
-      if (discoverTab) { discoverTab.classList.add('active'); discoverTab.setAttribute('aria-selected','true'); }
-      // lazy-load trending on first enter
-      if (!discoverTrending.dataset.loaded) {
-        loadTrending().catch(()=>{});
-      }
-      setStatus('Browse trending and global search');
+// --- Tab Controller (robust, ARIA-compliant) ---
+const tabs = [feedTab, eventsTab, discoverTab].filter(Boolean);
+const panels = new Map([
+  ['feed', feedEl],
+  ['events', eventsPanel],
+  ['discover', discoverPanel],
+]);
+
+function setActiveTab(view) {
+  if (!panels.has(view)) view = 'feed';
+  // Hide/show panels
+  panels.forEach((panel, name) => {
+    const isActive = name === view;
+    panel.hidden = !isActive;
+  });
+  // Show/hide feed-only controls and chips when switching views
+  const isFeed = view === 'feed';
+  if (feedControls) feedControls.hidden = !isFeed;
+  if (sectionChips) sectionChips.style.display = isFeed ? '' : 'none';
+  // Update tab button states
+  tabs.forEach((btn) => {
+    const target = btn.dataset.target;
+    const isActive = target === view;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    btn.tabIndex = isActive ? 0 : -1;
+  });
+  // Lazy loads per view
+  if (view === 'events') {
+    loadEvents().catch((err) => setStatus(`Error loading events: ${err.message}`));
+  } else if (view === 'discover') {
+    if (!discoverTrending.dataset.loaded) {
+      loadTrending().catch(() => {});
     }
   }
+  // Persist + URL
+  activeView = view;
+  savePrefs({ view });
+  const urlState = readURL();
+  updateURL({ ...urlState, view });
 }
+
+// Backward-compatible alias
+function switchView(view) { setActiveTab(view); }
 
 async function loadEvents(forceRefresh = false) {
   if (!forceRefresh && eventsCache.data) {
@@ -659,11 +670,45 @@ clearSearchBtn.addEventListener('click', () => {
   searchInput.focus();
 });
 
-if (feedTab) feedTab.addEventListener('click', () => switchView('feed'));
-if (eventsTab) eventsTab.addEventListener('click', () => switchView('events'));
-if (discoverTab) discoverTab.addEventListener('click', () => switchView('discover'));
+// Delegate clicks to the tablist for resilience
+const tablist = document.querySelector('.view-toggle[role="tablist"]');
+if (tablist) {
+  tablist.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[role="tab"]');
+    if (!btn) return;
+    const target = btn.dataset.target;
+    setActiveTab(target);
+  });
+  // Keyboard navigation (ArrowLeft/ArrowRight/Home/End)
+  tablist.addEventListener('keydown', (e) => {
+    const idx = tabs.indexOf(document.activeElement);
+    if (idx === -1) return;
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      const next = tabs[(idx + 1) % tabs.length];
+      next.focus(); setActiveTab(next.dataset.target);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const prev = tabs[(idx - 1 + tabs.length) % tabs.length];
+      prev.focus(); setActiveTab(prev.dataset.target);
+    } else if (e.key === 'Home') {
+      e.preventDefault(); tabs[0].focus(); setActiveTab(tabs[0].dataset.target);
+    } else if (e.key === 'End') {
+      e.preventDefault(); const last = tabs[tabs.length-1]; last.focus(); setActiveTab(last.dataset.target);
+    }
+  });
+}
 if (eventsOnlyToggle) eventsOnlyToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
-if (hideReadToggle) hideReadToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
+if (eventsOnlyToggle) eventsOnlyToggle.addEventListener('change', () => {
+  savePrefs({ eventsOnly: !!eventsOnlyToggle.checked });
+  const urlState = readURL();
+  updateURL({ ...urlState, eventsOnly: eventsOnlyToggle.checked });
+  loadFeed({ forceRefresh: false });
+});
+if (hideReadToggle) hideReadToggle.addEventListener('change', () => {
+  savePrefs({ hideRead: !!hideReadToggle.checked });
+  loadFeed({ forceRefresh: false });
+});
 if (markAllReadBtn) markAllReadBtn.addEventListener('click', () => {
   const date = dateSelect.value || prefs.date;
   const items = (feedCache.get(date) || {}).items || [];
@@ -694,7 +739,7 @@ function updateURL({ date, section, q, view, eventsOnly }) {
   if (date) p.set('date', date);
   if (section) p.set('section', section);
   if (q) p.set('q', q);
-  if (view && view !== 'feed') p.set('view', view);
+  if (view) p.set('view', view);
   if (eventsOnly) p.set('eventsOnly', '1');
   const qs = p.toString();
   const next = qs ? `?${qs}` : location.pathname;
@@ -719,16 +764,20 @@ function updateURL({ date, section, q, view, eventsOnly }) {
     const initView = urlState.view || prefs.view;
     if (initView) activeView = initView;
 
-    const initEventsOnly = urlState.eventsOnly ?? prefs.eventsOnly;
-    if (eventsOnlyToggle && typeof initEventsOnly === 'boolean') {
-      eventsOnlyToggle.checked = initEventsOnly;
-    }
+  const initEventsOnly = urlState.eventsOnly ?? prefs.eventsOnly;
+  if (eventsOnlyToggle && typeof initEventsOnly === 'boolean') {
+    eventsOnlyToggle.checked = initEventsOnly;
+  }
+  if (hideReadToggle && typeof prefs.hideRead === 'boolean') {
+    hideReadToggle.checked = !!prefs.hideRead;
+  }
 
     // Theme: apply saved or system
     applyTheme(prefs.theme || 'system');
 
+    // Ensure tabs start in a consistent state before data (also hides feed-only controls for other views)
+    setActiveTab(activeView || 'feed');
     await loadFeed();
-    switchView(activeView);
     // Discover listeners
     if (discoverSearchBtn) discoverSearchBtn.addEventListener('click', ()=> doGlobalSearch(discoverSearch.value.trim()));
     if (discoverSearch) discoverSearch.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); doGlobalSearch(discoverSearch.value.trim()); }});
