@@ -13,6 +13,14 @@ const markAllReadBtn = $('#markAllReadBtn');
 const sectionChips = $('#sectionChips');
 const eventsPanel = $('#eventsPanel');
 const eventsList = $('#eventsList');
+// Discover view elements
+const discoverTab = $('#discoverTab');
+const discoverPanel = $('#discoverPanel');
+const discoverSearch = $('#discoverSearch');
+const discoverSearchBtn = $('#discoverSearchBtn');
+const discoverResults = $('#discoverResults');
+const discoverTrending = $('#discoverTrending');
+const similarResults = $('#similarResults');
 const feedTab = $('#feedTab');
 const eventsTab = $('#eventsTab');
 const themeToggle = $('#themeToggle');
@@ -107,19 +115,31 @@ function switchView(view) {
   if (view === 'feed') {
     feedEl.hidden = false;
     eventsPanel.hidden = true;
+    discoverPanel.hidden = true;
     feedTab.classList.add('active');
     feedTab.setAttribute('aria-selected', 'true');
     eventsTab.classList.remove('active');
     eventsTab.setAttribute('aria-selected', 'false');
+    if (discoverTab) { discoverTab.classList.remove('active'); discoverTab.setAttribute('aria-selected','false'); }
     setStatus('Showing article feed');
   } else {
-    feedEl.hidden = true;
-    eventsPanel.hidden = false;
-    feedTab.classList.remove('active');
-    feedTab.setAttribute('aria-selected', 'false');
-    eventsTab.classList.add('active');
-    eventsTab.setAttribute('aria-selected', 'true');
-    loadEvents().catch((err) => setStatus(`Error loading events: ${err.message}`));
+    if (view === 'events') {
+      feedEl.hidden = true; discoverPanel.hidden = true; eventsPanel.hidden = false;
+      feedTab.classList.remove('active'); feedTab.setAttribute('aria-selected','false');
+      eventsTab.classList.add('active'); eventsTab.setAttribute('aria-selected','true');
+      if (discoverTab) { discoverTab.classList.remove('active'); discoverTab.setAttribute('aria-selected','false'); }
+      loadEvents().catch((err) => setStatus(`Error loading events: ${err.message}`));
+    } else if (view === 'discover') {
+      feedEl.hidden = true; eventsPanel.hidden = true; discoverPanel.hidden = false;
+      feedTab.classList.remove('active'); feedTab.setAttribute('aria-selected','false');
+      eventsTab.classList.remove('active'); eventsTab.setAttribute('aria-selected','false');
+      if (discoverTab) { discoverTab.classList.add('active'); discoverTab.setAttribute('aria-selected','true'); }
+      // lazy-load trending on first enter
+      if (!discoverTrending.dataset.loaded) {
+        loadTrending().catch(()=>{});
+      }
+      setStatus('Browse trending and global search');
+    }
   }
 }
 
@@ -208,6 +228,95 @@ async function fetchJSON(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
+}
+
+// -------- Discover (global search + trending) --------
+async function loadTrending(kind = 'section') {
+  try {
+    const data = await fetchJSON(`/analytics/trending?kind=${encodeURIComponent(kind)}&limit=20`);
+    discoverTrending.innerHTML = '';
+    if (!Array.isArray(data) || !data.length) {
+      discoverTrending.innerHTML = '<div class="muted">No trending items yet.</div>';
+    } else {
+      data.forEach((row) => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `<strong>${row.key}</strong> <span class="muted">score: ${Number(row.score||0).toFixed(2)} z: ${row.zscore==null?'–':Number(row.zscore).toFixed(2)}</span>`;
+        div.addEventListener('click', async () => {
+          // Quick timeline fetch when clicking a trending item
+          try {
+            const tl = await fetchJSON(`/analytics/timeline?kind=${encodeURIComponent(kind)}&key=${encodeURIComponent(row.key)}&days=30`);
+            // Render a minimal sparkline below
+            const values = tl.map(p => Number(p.count||0));
+            const svg = sparkline(values, 120, 24);
+            div.appendChild(svg);
+          } catch {}
+        });
+        discoverTrending.appendChild(div);
+      });
+    }
+    discoverTrending.dataset.loaded = '1';
+  } catch (e) {
+    discoverTrending.innerHTML = `<div class="muted">Failed to load trending: ${e.message}</div>`;
+  }
+}
+
+function sparkline(values, w=120, h=24){
+  if (!values.length) return document.createElement('span');
+  const max = Math.max(...values); const min = Math.min(...values);
+  const dx = w/(values.length-1||1); const rng = (max-min)||1;
+  const pts = values.map((v,i)=>`${i*dx},${h - ((v-min)/rng)*h}`).join(' ');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('width', w); svg.setAttribute('height', h); svg.style.display='block'; svg.style.marginTop='6px';
+  const poly = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+  poly.setAttribute('fill','none'); poly.setAttribute('stroke','var(--accent)'); poly.setAttribute('stroke-width','2');
+  poly.setAttribute('points', pts); svg.appendChild(poly); return svg;
+}
+
+async function doGlobalSearch(q){
+  if (!q) { discoverResults.innerHTML = '<div class="muted">Enter a query to search all dates.</div>'; return; }
+  setStatus('Searching…');
+  try{
+    const data = await fetchJSON(`/search?q=${encodeURIComponent(q)}&limit=30`);
+    renderDiscoverResults(data||[], q);
+    setStatus('');
+  }catch(e){
+    discoverResults.innerHTML = `<div class="muted">Search failed: ${e.message}</div>`;
+    setStatus('');
+  }
+}
+
+function renderDiscoverResults(items, q){
+  discoverResults.innerHTML = '';
+  if (!items.length){
+    discoverResults.innerHTML = `<div class="muted">No results for “${q}”.</div>`; return;
+  }
+  items.forEach(it => {
+    const div = document.createElement('div'); div.className='item';
+    const h = document.createElement('div'); h.innerHTML = `<strong>${it.title||'(untitled)'}</strong> <span class="muted">${it.section||''}</span>`; div.appendChild(h);
+    if (it.summary){ const p=document.createElement('div'); p.textContent = it.summary.slice(0,220); div.appendChild(p); }
+    const row = document.createElement('div'); row.className='meta';
+    const open = document.createElement('a'); open.href = it.article_id ? `/articles/${it.article_id}/source` : '#'; open.textContent='Open source'; open.target='_blank'; open.rel='noopener'; row.appendChild(open);
+    const sim = document.createElement('button'); sim.textContent='Similar'; sim.className='ghost'; sim.addEventListener('click',()=>showSimilar(it.article_id)); row.appendChild(sim);
+    div.appendChild(row);
+    discoverResults.appendChild(div);
+  });
+}
+
+async function showSimilar(id){
+  if (!id) return;
+  similarResults.innerHTML = '<div class="muted">Loading similar…</div>';
+  try{
+    const data = await fetchJSON(`/similar?id=${id}&limit=10`);
+    similarResults.innerHTML = '';
+    data.forEach(it => {
+      const div = document.createElement('div'); div.className='item';
+      div.innerHTML = `<strong>${it.title||'(untitled)'}</strong> <span class="muted">${it.section||''}</span><div>${(it.summary||'').slice(0,200)}</div>`;
+      similarResults.appendChild(div);
+    });
+  }catch(e){
+    similarResults.innerHTML = `<div class="muted">Similar failed: ${e.message}</div>`;
+  }
 }
 
 function fmtDate(d) {
@@ -552,6 +661,7 @@ clearSearchBtn.addEventListener('click', () => {
 
 if (feedTab) feedTab.addEventListener('click', () => switchView('feed'));
 if (eventsTab) eventsTab.addEventListener('click', () => switchView('events'));
+if (discoverTab) discoverTab.addEventListener('click', () => switchView('discover'));
 if (eventsOnlyToggle) eventsOnlyToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
 if (hideReadToggle) hideReadToggle.addEventListener('change', () => loadFeed({ forceRefresh: false }));
 if (markAllReadBtn) markAllReadBtn.addEventListener('click', () => {
@@ -619,6 +729,9 @@ function updateURL({ date, section, q, view, eventsOnly }) {
 
     await loadFeed();
     switchView(activeView);
+    // Discover listeners
+    if (discoverSearchBtn) discoverSearchBtn.addEventListener('click', ()=> doGlobalSearch(discoverSearch.value.trim()));
+    if (discoverSearch) discoverSearch.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); doGlobalSearch(discoverSearch.value.trim()); }});
   } catch (e) {
     setStatus(`Error: ${e.message}`);
     setLastUpdated(null);

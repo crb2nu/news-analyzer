@@ -15,6 +15,7 @@
       <nav class="view-toggle" role="tablist" aria-label="View toggle">
         <button id="feedTab" type="button" class="active" data-target="feed" role="tab" aria-selected="true">Feed</button>
         <button id="eventsTab" type="button" data-target="events" role="tab" aria-selected="false">Events <span id="eventsBadge" class="badge hidden">0</span></button>
+        <button id="discoverTab" type="button" data-target="discover" role="tab" aria-selected="false">Discover</button>
       </nav>
       <button id="themeToggle" type="button" aria-label="Toggle theme" title="Toggle theme">🌗</button>
       <div class="controls" role="group" aria-label="Feed controls">
@@ -50,6 +51,26 @@
       <section id="feed" class="feed" role="tabpanel" aria-labelledby="feedTab"></section>
       <section id="eventsPanel" class="events-panel" role="tabpanel" aria-labelledby="eventsTab" hidden>
         <div class="events-list" id="eventsList"></div>
+      </section>
+      <section id="discoverPanel" class="discover" role="tabpanel" aria-labelledby="discoverTab" hidden>
+        <div class="discover-grid">
+          <div class="card">
+            <h3>Search (all dates)</h3>
+            <div class="search-group" style="margin:8px 0 12px">
+              <input id="discoverSearch" type="search" placeholder="Search BM25 (e.g., school budget)" aria-label="Search all articles" />
+              <button id="discoverSearchBtn" type="button">Search</button>
+            </div>
+            <div id="discoverResults"></div>
+          </div>
+          <div class="card">
+            <h3>Trending (sections)</h3>
+            <div id="discoverTrending" class="list"></div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>More like this</h3>
+          <div id="similarResults" class="list"></div>
+        </div>
       </section>
     </main>
 
