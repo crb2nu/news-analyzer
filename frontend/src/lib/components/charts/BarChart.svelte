@@ -36,32 +36,32 @@
 	{/if}
 
 	{#if data.length > 0}
-		<div class="relative" style="height: {height}px;">
-			{#if horizontal}
-				<!-- Horizontal bars -->
-				<div class="flex flex-col justify-between h-full py-2">
-					{#each data as item, i}
-						<div class="flex items-center gap-3 mb-1">
-							<div class="w-24 text-xs text-right text-slate-600 dark:text-slate-400 truncate">
-								{item.label}
-							</div>
-							<div class="flex-1 relative">
-								<div
-									class="h-8 rounded transition-all duration-500 ease-out"
-									style="width: {xScale(item.value)}%; background-color: {item.color || defaultColor}; min-width: 2px;"
-								>
-									{#if showValues && xScale(item.value) > 15}
-										<span class="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-medium text-white">
-											{Math.round(item.value)}
-										</span>
-									{/if}
-								</div>
+		{#if horizontal}
+			<!-- Horizontal bars - auto height -->
+			<div class="flex flex-col gap-2 py-2">
+				{#each data as item, i}
+					<div class="flex items-center gap-3">
+						<div class="w-24 text-xs text-right text-slate-600 dark:text-slate-400 truncate">
+							{item.label}
+						</div>
+						<div class="flex-1 relative">
+							<div
+								class="h-8 rounded transition-all duration-500 ease-out"
+								style="width: {xScale(item.value)}%; background-color: {item.color || defaultColor}; min-width: 2px;"
+							>
+								{#if showValues && xScale(item.value) > 15}
+									<span class="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-medium text-white">
+										{Math.round(item.value)}
+									</span>
+								{/if}
 							</div>
 						</div>
-					{/each}
-				</div>
-			{:else}
-				<!-- Vertical bars -->
+					</div>
+				{/each}
+			</div>
+		{:else}
+			<!-- Vertical bars - fixed height -->
+			<div class="relative" style="height: {height}px;">
 				<div class="flex items-end justify-around h-full gap-2 pb-8">
 					{#each data as item, i}
 						{@const barHeightPx = ((item.value / maxValue) * (height - 60))}
@@ -84,8 +84,8 @@
 						</div>
 					{/each}
 				</div>
-			{/if}
-		</div>
+			</div>
+		{/if}
 	{:else}
 		<div class="flex items-center justify-center h-[{height}px] text-slate-400 dark:text-slate-600 text-sm">
 			No data available

@@ -116,7 +116,7 @@
 			{#if $trendingTagsQuery.isLoading}
 				<SkeletonChart type="bar" height={280} />
 			{:else if tagBarData.length > 0}
-				<BarChart data={tagBarData} height={280} horizontal={true} />
+				<BarChart data={tagBarData} horizontal={true} />
 			{:else}
 				<p class="text-slate-600 dark:text-slate-400 text-center py-8">No trending tags</p>
 			{/if}
