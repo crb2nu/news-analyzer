@@ -335,6 +335,29 @@ class DatabaseManager:
         
         async with self.get_connection() as conn:
             await conn.execute(sql, status, article_id)
+
+    async def reset_processing_status_for_dates(self,
+                                                start_date: date,
+                                                end_date: date,
+                                                target_statuses: Optional[List[str]] = None) -> int:
+        """Reset processing status to 'extracted' for a date window."""
+        if not start_date or not end_date:
+            raise ValueError("start_date and end_date are required")
+
+        base_sql = [
+            "UPDATE articles SET processing_status = 'extracted', date_updated = NOW()",
+            "WHERE date(date_extracted) BETWEEN $1 AND $2",
+        ]
+        params: List = [start_date, end_date]
+        if target_statuses:
+            base_sql.append("AND processing_status = ANY($3::text[])")
+            params.append(target_statuses)
+        base_sql.append("RETURNING id")
+        sql = "\n".join(base_sql)
+
+        async with self.get_connection() as conn:
+            rows = await conn.fetch(sql, *params)
+            return len(rows)
     
     async def store_summary(self, 
                           article_id: int, 

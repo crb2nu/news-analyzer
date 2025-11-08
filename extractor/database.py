@@ -274,16 +274,7 @@ class DatabaseManager:
                     if existing_id:
                         duplicate_count += 1
                         logger.debug(f"Duplicate article found: {stored_article.title[:50]}...")
-                        await self.store_article_events(
-                            conn,
-                            existing_id,
-                            stored_article.event_dates or [],
-                        )
-                        await conn.execute(
-                            "UPDATE articles SET event_dates = $1 WHERE id = $2",
-                            json.dumps(stored_article.event_dates) if stored_article.event_dates else None,
-                            existing_id,
-                        )
+                        await self._update_existing_article(conn, existing_id, stored_article)
                         continue
 
                     # Insert new article
@@ -408,6 +399,153 @@ class DatabaseManager:
             error_message,
             metadata_json
         )
+
+    async def _update_existing_article(self,
+                                      conn: Connection,
+                                      article_id: int,
+                                      new_article: StoredArticle) -> None:
+        """Merge new extraction metadata into an existing article record."""
+        row = await conn.fetchrow(
+            """
+            SELECT section, author, tags, word_count, page_number, column_number,
+                   date_published, metadata, raw_html, location_name, location_lat,
+                   location_lon, source_file, source_url, event_dates
+            FROM articles WHERE id = $1
+            """,
+            article_id,
+        )
+        if not row:
+            return
+
+        existing = dict(row)
+
+        existing_tags = self._ensure_list(existing.get('tags'))
+        incoming_tags = new_article.tags or []
+        merged_tags = self._merge_tags(existing_tags, incoming_tags)
+        tags_json = json.dumps(merged_tags) if merged_tags else None
+
+        existing_meta = self._ensure_dict(existing.get('metadata'))
+        merged_meta = self._merge_metadata(existing_meta, new_article.metadata)
+        metadata_json = json.dumps(merged_meta) if merged_meta else None
+
+        section = new_article.section or existing.get('section')
+        author = new_article.author or existing.get('author')
+        word_count = new_article.word_count or existing.get('word_count') or 0
+        page_number = new_article.page_number if new_article.page_number is not None else existing.get('page_number')
+        column_number = new_article.column_number if new_article.column_number is not None else existing.get('column_number')
+        date_published = new_article.date_published or existing.get('date_published')
+
+        raw_html = new_article.raw_html if new_article.raw_html else existing.get('raw_html')
+        location_name = new_article.location_name or existing.get('location_name')
+        location_lat = new_article.location_lat if new_article.location_lat is not None else existing.get('location_lat')
+        location_lon = new_article.location_lon if new_article.location_lon is not None else existing.get('location_lon')
+        source_file = existing.get('source_file') or new_article.source_file
+        source_url = existing.get('source_url') or new_article.source_url
+
+        existing_events = self._ensure_event_list(existing.get('event_dates'))
+        merged_events = existing_events
+        if new_article.event_dates:
+            merged_events = self._merge_event_lists(existing_events, new_article.event_dates)
+            if merged_events:
+                await self.store_article_events(conn, article_id, merged_events)
+        event_dates_json = json.dumps(merged_events) if merged_events else None
+
+        await conn.execute(
+            """
+            UPDATE articles
+            SET section = $1,
+                author = $2,
+                tags = $3,
+                word_count = $4,
+                page_number = $5,
+                column_number = $6,
+                date_published = $7,
+                metadata = $8,
+                raw_html = $9,
+                location_name = $10,
+                location_lat = $11,
+                location_lon = $12,
+                source_file = $13,
+                source_url = $14,
+                event_dates = $15
+            WHERE id = $16
+            """,
+            section,
+            author,
+            tags_json,
+            word_count,
+            page_number,
+            column_number,
+            date_published,
+            metadata_json,
+            raw_html,
+            location_name,
+            location_lat,
+            location_lon,
+            source_file,
+            source_url,
+            event_dates_json,
+            article_id,
+        )
+
+    def _ensure_list(self, value: Optional[Union[str, List]]) -> List:
+        if not value:
+            return []
+        if isinstance(value, list):
+            return value
+        try:
+            return json.loads(value) if value else []
+        except Exception:
+            return []
+
+    def _ensure_event_list(self, value: Optional[Union[str, List]]) -> List[Dict]:
+        raw = self._ensure_list(value)
+        return [item for item in raw if isinstance(item, dict)]
+
+    def _ensure_dict(self, value: Optional[Union[str, Dict]]) -> Dict:
+        if not value:
+            return {}
+        if isinstance(value, dict):
+            return value
+        try:
+            loaded = json.loads(value)
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+
+    def _merge_metadata(self, existing: Dict, new_metadata: Optional[Dict]) -> Dict:
+        if not new_metadata:
+            return existing
+        merged = existing.copy()
+        for key, value in new_metadata.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+        return merged
+
+    def _merge_tags(self, existing: List[str], incoming: List[str]) -> List[str]:
+        combined = []
+        for tag in (existing or []):
+            norm = tag.strip()
+            if norm and norm not in combined:
+                combined.append(norm)
+        for tag in (incoming or []):
+            norm = str(tag).strip()
+            if norm and norm not in combined:
+                combined.append(norm)
+        return combined
+
+    def _merge_event_lists(self, existing: List[Dict], new_events: Optional[List[Dict]]) -> List[Dict]:
+        if not new_events:
+            return existing
+        seen = {json.dumps(evt, sort_keys=True): evt for evt in existing or []}
+        for evt in new_events:
+            if not isinstance(evt, dict):
+                continue
+            key = json.dumps(evt, sort_keys=True)
+            seen[key] = evt
+        return list(seen.values())
 
     def _attach_events(self, article: StoredArticle) -> None:
         try:

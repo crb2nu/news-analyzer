@@ -31,7 +31,7 @@
 </script>
 
 <Card
-	class={clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}
+	hoverable={clickable}
 	on:click={handleClick}
 >
 	<div class="flex items-start justify-between gap-3">
