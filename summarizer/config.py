@@ -50,6 +50,7 @@ class Settings(BaseSettings):
         env_prefix = ''  # read variables directly
         env_file = '.env'
         env_file_encoding = 'utf-8'
+        extra = 'ignore'
     
     def get_random_proxy(self) -> dict:
         """Get a random proxy configuration for requests"""

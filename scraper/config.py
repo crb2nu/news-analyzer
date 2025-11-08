@@ -54,6 +54,7 @@ class Settings(BaseSettings):
         env_prefix = ''  # read variables directly
         env_file = '.env'
         env_file_encoding = 'utf-8'
+        extra = 'ignore'
     
     def _select_proxy_port(self) -> int:
         """Select a SmartProxy port with optional sticky behavior.

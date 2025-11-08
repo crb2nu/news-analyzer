@@ -120,44 +120,44 @@ class EditionDiscoverer:
             page = context.new_page()
             proxy_label = proxy_label_from_settings(self.settings)
             logger.info("Discover start", extra={"publication": selected_publication, "date": target_date.isoformat(), "proxy": proxy_label})
-                
-                # Navigate to the e-edition root (allows switching across publications)
-                base_url = "https://swvatoday.com/eedition/"
-                logger.info(f"Navigating to {base_url}")
-                page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
-                page.wait_for_timeout(2000)
 
-                self._dismiss_cookie_banner(page)
-                if not self._select_publication(page, publication):
-                    logger.info("Could not select publication %s; staying on default", publication)
-                    selected_publication = DEFAULT_PUBLICATION
-                else:
-                    selected_publication = publication
-                    base_url = self._derive_base_url(page.url)
+            # Navigate to the e-edition root (allows switching across publications)
+            base_url = "https://swvatoday.com/eedition/"
+            logger.info(f"Navigating to {base_url}")
+            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
 
-                index_url = self._find_edition_in_index(page, target_date, base_url)
-                replacement_page: Optional[Union[str, Page]] = None
-                if index_url:
-                    page.goto(index_url, timeout=60000, wait_until="domcontentloaded")
-                    page.wait_for_load_state("networkidle", timeout=15000)
+            self._dismiss_cookie_banner(page)
+            if not self._select_publication(page, publication):
+                logger.info("Could not select publication %s; staying on default", publication)
+                selected_publication = DEFAULT_PUBLICATION
+            else:
+                selected_publication = publication
+                base_url = self._derive_base_url(page.url)
+
+            index_url = self._find_edition_in_index(page, target_date, base_url)
+            replacement_page: Optional[Union[str, Page]] = None
+            if index_url:
+                page.goto(index_url, timeout=60000, wait_until="domcontentloaded")
+                page.wait_for_load_state("networkidle", timeout=15000)
+                base_url = self._derive_base_url(page.url)
+            else:
+                replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
+            if isinstance(replacement_page, Page):
+                page = replacement_page
+                base_url = self._derive_base_url(page.url)
+            elif isinstance(replacement_page, str):
+                page.goto(replacement_page, timeout=60000, wait_until="domcontentloaded")
+                page.wait_for_load_state("networkidle", timeout=15000)
+                base_url = self._derive_base_url(page.url)
+            else:
+                # Fall back to in-viewer date navigation if search fails
+                if not self._navigate_to_date(page, target_date):
+                    logger.warning(f"Could not navigate directly to {target_date}; attempting current edition")
                     base_url = self._derive_base_url(page.url)
-                else:
-                    replacement_page = self._open_edition_from_search(context, page, target_date, base_url)
-                if isinstance(replacement_page, Page):
-                    page = replacement_page
-                    base_url = self._derive_base_url(page.url)
-                elif isinstance(replacement_page, str):
-                    page.goto(replacement_page, timeout=60000, wait_until="domcontentloaded")
-                    page.wait_for_load_state("networkidle", timeout=15000)
-                    base_url = self._derive_base_url(page.url)
-                else:
-                    # Fall back to in-viewer date navigation if search fails
-                    if not self._navigate_to_date(page, target_date):
-                        logger.warning(f"Could not navigate directly to {target_date}; attempting current edition")
-                        base_url = self._derive_base_url(page.url)
-                current_publication = selected_publication or self._infer_publication_from_url(page.url)
-                if current_publication:
-                    selected_publication = current_publication
+            current_publication = selected_publication or self._infer_publication_from_url(page.url)
+            if current_publication:
+                selected_publication = current_publication
 
                 # Wait briefly for viewer content to settle
                 page.wait_for_timeout(2000)

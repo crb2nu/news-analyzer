@@ -239,108 +239,108 @@ def login(
                 context = bm.new_context()
                 page = context.new_page()
 
-                    logger.info("Navigating to account login page")
-                    try:
-                        response = page.goto(LOGIN_URL, timeout=45000, wait_until="domcontentloaded")
-                        if response and response.status == 429:
-                            logger.error("Login page responded with HTTP 429 (Too Many Requests)")
-                            lockout_guard.activate("http 429 from login page")
-                            browser.close()
-                            return False
-                        page.wait_for_load_state("domcontentloaded", timeout=20000)
-                    except PlaywrightTimeoutError as exc:
-                        logger.error("Failed to load login page: %s", exc)
-                        if debug_helper:
-                            _debug_upload(page, debug_helper, prefix="debug/login/login_page_timeout")
-                        browser.close()
-                        continue
-
+                logger.info("Navigating to account login page")
+                try:
+                    response = page.goto(LOGIN_URL, timeout=45000, wait_until="domcontentloaded")
+                    if response and response.status == 429:
+                        logger.error("Login page responded with HTTP 429 (Too Many Requests)")
+                        lockout_guard.activate("http 429 from login page")
+                        bm.close()
+                        return False
+                    page.wait_for_load_state("domcontentloaded", timeout=20000)
+                except PlaywrightTimeoutError as exc:
+                    logger.error("Failed to load login page: %s", exc)
                     if debug_helper:
-                        _debug_upload(page, debug_helper, prefix="debug/login/initial")
-                    _dismiss_cookie_banner(page, debug_helper, label="initial")
+                        _debug_upload(page, debug_helper, prefix="debug/login/login_page_timeout")
+                    bm.close()
+                    continue
 
-                    email_field = page.locator("#user-username").first
-                    if email_field.count() == 0:
-                        email_field = page.locator("form.user-login-form input[name='username']").first
-                    if email_field.count() == 0:
-                        if debug_helper:
-                            _debug_upload(page, debug_helper, prefix="debug/login/no_username")
-                        raise PlaywrightTimeoutError("Username field not found")
+                if debug_helper:
+                    _debug_upload(page, debug_helper, prefix="debug/login/initial")
+                _dismiss_cookie_banner(page, debug_helper, label="initial")
 
-                    password_field = page.locator("#user-password").first
-                    if password_field.count() == 0:
-                        password_field = page.locator("form.user-login-form input[name='password']").first
-                    if password_field.count() == 0:
-                        if debug_helper:
-                            _debug_upload(page, debug_helper, prefix="debug/login/no_password")
-                        raise PlaywrightTimeoutError("Password field not found")
+                email_field = page.locator("#user-username").first
+                if email_field.count() == 0:
+                    email_field = page.locator("form.user-login-form input[name='username']").first
+                if email_field.count() == 0:
+                    if debug_helper:
+                        _debug_upload(page, debug_helper, prefix="debug/login/no_username")
+                    raise PlaywrightTimeoutError("Username field not found")
 
-                    logger.info("Filling login credentials")
-                    email_field.fill(settings.eedition_user)
-                    password_field.fill(settings.eedition_pass)
+                password_field = page.locator("#user-password").first
+                if password_field.count() == 0:
+                    password_field = page.locator("form.user-login-form input[name='password']").first
+                if password_field.count() == 0:
+                    if debug_helper:
+                        _debug_upload(page, debug_helper, prefix="debug/login/no_password")
+                    raise PlaywrightTimeoutError("Password field not found")
 
-                    logger.info("Submitting login form")
-                    submit_btn = page.locator("form.user-login-form button.btn-primary").first
-                    if submit_btn.count() > 0:
-                        submit_btn.click()
-                    else:
-                        password_field.press('Enter')
+                logger.info("Filling login credentials")
+                email_field.fill(settings.eedition_user)
+                password_field.fill(settings.eedition_pass)
 
+                logger.info("Submitting login form")
+                submit_btn = page.locator("form.user-login-form button.btn-primary").first
+                if submit_btn.count() > 0:
+                    submit_btn.click()
+                else:
+                    password_field.press('Enter')
+
+                try:
+                    _dismiss_cookie_banner(page, debug_helper, label="post_credentials")
+                    page.wait_for_load_state("networkidle", timeout=20000)
+                except PlaywrightTimeoutError:
+                    logger.warning("Timeout waiting for post-login network idle; continuing")
+
+                error_banner = page.locator(".alert-danger").first
+                if error_banner.count() > 0 and error_banner.is_visible():
                     try:
-                        _dismiss_cookie_banner(page, debug_helper, label="post_credentials")
-                        page.wait_for_load_state("networkidle", timeout=20000)
+                        error_text = error_banner.inner_text().strip()
+                    except Exception:
+                        error_text = "Unknown error"
+                    logger.error("Login error banner: %s", error_text)
+                    if debug_helper:
+                        _debug_upload(page, debug_helper, prefix="debug/login/error_banner")
+                    if "too many login attempts" in error_text.lower():
+                        lockout_guard.activate("site lockout message")
+                        bm.close()
+                        return False
+                    bm.close()
+                    continue
+
+                if "users/login" in page.url.lower():
+                    logger.error("Login failed - still on login page")
+                    if debug_helper:
+                        _debug_upload(page, debug_helper, prefix="debug/login/post_submit")
+                    bm.close()
+                    continue
+
+                if not page.url.startswith(E_EDITION_URL):
+                    try:
+                        page.goto(E_EDITION_URL, timeout=45000)
+                        page.wait_for_load_state("domcontentloaded", timeout=20000)
                     except PlaywrightTimeoutError:
-                        logger.warning("Timeout waiting for post-login network idle; continuing")
-
-                    error_banner = page.locator(".alert-danger").first
-                    if error_banner.count() > 0 and error_banner.is_visible():
-                        try:
-                            error_text = error_banner.inner_text().strip()
-                        except Exception:
-                            error_text = "Unknown error"
-                        logger.error("Login error banner: %s", error_text)
+                        logger.error("Unable to load e-edition after login")
                         if debug_helper:
-                            _debug_upload(page, debug_helper, prefix="debug/login/error_banner")
-                        if "too many login attempts" in error_text.lower():
-                            lockout_guard.activate("site lockout message")
-                            bm.close()
-                            return False
+                            _debug_upload(page, debug_helper, prefix="debug/login/eedition_failed")
                         bm.close()
                         continue
 
-                    if "users/login" in page.url.lower():
-                        logger.error("Login failed - still on login page")
-                        if debug_helper:
-                            _debug_upload(page, debug_helper, prefix="debug/login/post_submit")
-                        bm.close()
-                        continue
+                _dismiss_cookie_banner(page, debug_helper, label="post_login_edition")
 
-                    if not page.url.startswith(E_EDITION_URL):
-                        try:
-                            page.goto(E_EDITION_URL, timeout=45000)
-                            page.wait_for_load_state("domcontentloaded", timeout=20000)
-                        except PlaywrightTimeoutError:
-                            logger.error("Unable to load e-edition after login")
-                            if debug_helper:
-                                _debug_upload(page, debug_helper, prefix="debug/login/eedition_failed")
-                            bm.close()
-                            continue
-
-                    _dismiss_cookie_banner(page, debug_helper, label="post_login_edition")
-
-                    target_path = storage_path or storage_state_path(settings)
-                    logger.info(f"Saving session state to {target_path}")
-                    context.storage_state(path=str(target_path))
-                    if storage_path.exists() and storage_path.stat().st_size > 0:
-                        logger.info("Login successful and session state saved")
-                        lockout_guard.clear()
-                        METRICS.inc_login_success(publication=None, proxy=proxy_label)
-                        bm.close()
-                        return True
-                    else:
-                        logger.error("Storage state file not created or empty")
-                        bm.close()
-                        continue
+                target_path = storage_path or storage_state_path(settings)
+                logger.info(f"Saving session state to {target_path}")
+                context.storage_state(path=str(target_path))
+                if storage_path.exists() and storage_path.stat().st_size > 0:
+                    logger.info("Login successful and session state saved")
+                    lockout_guard.clear()
+                    METRICS.inc_login_success(publication=None, proxy=proxy_label)
+                    bm.close()
+                    return True
+                else:
+                    logger.error("Storage state file not created or empty")
+                    bm.close()
+                    continue
 
             except Exception as e:
                 logger.error(f"Login attempt mode ({'proxy' if mode else 'direct'}) failed: {str(e)}")
@@ -379,23 +379,24 @@ def verify_session(storage_path: Path = Path("storage_state.json")) -> bool:
         bm.start()
         context = bm.new_context(storage_path=storage_path)
         page = context.new_page()
-            
-            # Try to access a protected page
-            page.goto(E_EDITION_URL, timeout=60000)
-            page.wait_for_load_state("networkidle", timeout=30000)
-            
-            # Check if we're redirected to login (session expired)
-            if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():
-                logger.info("Session expired - login required")
-                METRICS.inc_verify_failure(publication=None, proxy=proxy_label)
-                bm.close()
-                return False
-            
-            logger.info("Session is still valid")
-            METRICS.inc_verify_success(publication=None, proxy=proxy_label)
+        proxy_label = proxy_label_from_settings(settings)
+
+        # Try to access a protected page
+        page.goto(E_EDITION_URL, timeout=60000)
+        page.wait_for_load_state("networkidle", timeout=30000)
+
+        # Check if we're redirected to login (session expired)
+        if "login" in page.url.lower() or page.locator("input[name='email']").is_visible():
+            logger.info("Session expired - login required")
+            METRICS.inc_verify_failure(publication=None, proxy=proxy_label)
             bm.close()
-            return True
-            
+            return False
+
+        logger.info("Session is still valid")
+        METRICS.inc_verify_success(publication=None, proxy=proxy_label)
+        bm.close()
+        return True
+    
     except Exception as e:
         logger.error(f"Session verification failed: {str(e)}")
         return False
