@@ -8,7 +8,9 @@ import type {
 	TrendingItem,
 	TrendingKind,
 	TimelineData,
-	EventsResponse
+	EventsResponse,
+	BrowseResponse,
+	FacetsResponse
 } from '$lib/types/api';
 
 // Feed endpoints
@@ -84,4 +86,38 @@ export async function getTimeline(
 export async function getEvents(days = 30): Promise<EventsResponse> {
 	const params = new URLSearchParams({ days: String(days) });
 	return fetchAPI<EventsResponse>(`/events?${params}`);
+}
+
+// Browse endpoints
+export interface BrowseFilters {
+	date_from?: string;
+	date_to?: string;
+	publications?: string[];
+	sections?: string[];
+	tags?: string[];
+	q?: string;
+	sort?: 'date_desc' | 'date_asc' | 'title';
+}
+
+export async function browseArticles(filters: BrowseFilters, limit = 50, offset = 0): Promise<BrowseResponse> {
+	const params = new URLSearchParams({
+		limit: String(limit),
+		offset: String(offset),
+		sort: filters.sort || 'date_desc'
+	});
+	if (filters.date_from) params.set('date_from', filters.date_from);
+	if (filters.date_to) params.set('date_to', filters.date_to);
+	if (filters.q) params.set('q', filters.q);
+	if (filters.publications?.length) params.set('publication', filters.publications.join(','));
+	if (filters.sections?.length) params.set('section', filters.sections.join(','));
+	if (filters.tags?.length) params.set('tag', filters.tags.join(','));
+	return fetchAPI<BrowseResponse>(`/articles/browse?${params}`);
+}
+
+export async function getFacets(date_from?: string, date_to?: string, q?: string): Promise<FacetsResponse> {
+	const params = new URLSearchParams();
+	if (date_from) params.set('date_from', date_from);
+	if (date_to) params.set('date_to', date_to);
+	if (q) params.set('q', q);
+	return fetchAPI<FacetsResponse>(`/analytics/facets?${params}`);
 }

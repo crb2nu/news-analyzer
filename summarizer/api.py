@@ -480,6 +480,67 @@ async def get_timeline(kind: str, key: str, days: int = 30):
         } for r in rows]
 
 
+# ---- Browse (articles + facets) ----
+class BrowseResponse(BaseModel):
+    items: List[Dict[str, Any]]
+    count: int
+
+
+@app.get("/articles/browse")
+async def browse_articles(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    publication: Optional[str] = None,  # comma-separated
+    section: Optional[str] = None,      # comma-separated
+    tag: Optional[str] = None,          # comma-separated
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    sort: str = "date_desc",
+    service: SummarizationService = Depends(get_service),
+):
+    def parse_date(s: Optional[str]) -> Optional[date]:
+        if not s:
+            return None
+        return date.fromisoformat(s)
+
+    pubs = [p.strip() for p in (publication.split(',') if publication else []) if p.strip()]
+    secs = [s.strip() for s in (section.split(',') if section else []) if s.strip()]
+    tags = [t.strip() for t in (tag.split(',') if tag else []) if t.strip()]
+
+    items = await service.db_manager.browse_articles(
+        date_from=parse_date(date_from),
+        date_to=parse_date(date_to),
+        publications=pubs or None,
+        sections=secs or None,
+        tags=tags or None,
+        q=q,
+        limit=max(1, min(limit, 200)),
+        offset=max(0, offset),
+        sort=sort,
+    )
+    return BrowseResponse(items=items, count=len(items))
+
+
+@app.get("/analytics/facets")
+async def analytics_facets(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    q: Optional[str] = None,
+    service: SummarizationService = Depends(get_service),
+):
+    def parse_date(s: Optional[str]) -> Optional[date]:
+        if not s:
+            return None
+        return date.fromisoformat(s)
+    data = await service.db_manager.browse_facets(
+        date_from=parse_date(date_from),
+        date_to=parse_date(date_to),
+        q=q,
+    )
+    return data
+
+
 # ---- Search endpoints (Weaviate) ----
 @app.get("/search")
 async def search(q: str, limit: int = 20):

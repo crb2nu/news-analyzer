@@ -11,6 +11,10 @@ export interface Article {
 	events: Event[];
 	url?: string;
 	source_url?: string;
+	// optional fields returned from browse
+	publication?: string | null;
+	date_extracted?: string | null;
+	edition_date?: string | null;
 }
 
 export interface Event {
@@ -80,3 +84,16 @@ export interface FeedFilters {
 }
 
 export type TrendingKind = 'section' | 'publication' | 'tag' | 'entity' | 'topic';
+
+// Browse API types
+export interface BrowseResponse {
+	items: Article[];
+	count: number;
+}
+
+export interface FacetItem { key: string; count: number }
+export interface FacetsResponse {
+	publications: FacetItem[];
+	sections: FacetItem[];
+	tags: FacetItem[];
+}

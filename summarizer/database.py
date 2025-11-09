@@ -584,6 +584,151 @@ class DatabaseManager:
                 })
             return results
 
+    # -------- Generic browse with filters + facets --------
+    async def browse_articles(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        publications: Optional[List[str]] = None,
+        sections: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        q: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort: str = "date_desc",
+    ) -> List[Dict]:
+        """Browse articles with common filters and pagination.
+
+        Note: sentiment filtering is not exposed yet (stored in summary text only).
+        """
+        where: List[str] = []
+        params: List = []
+
+        # Date filter (prefer edition_date; fallback to extracted date)
+        if date_from:
+            params.append(date_from)
+            where.append(f"COALESCE(edition_date, DATE(date_extracted)) >= ${len(params)}")
+        if date_to:
+            params.append(date_to)
+            where.append(f"COALESCE(edition_date, DATE(date_extracted)) <= ${len(params)}")
+
+        if publications:
+            params.append(publications)
+            where.append(f"publication = ANY(${len(params)}::text[])")
+        if sections:
+            params.append(sections)
+            where.append(f"section = ANY(${len(params)}::text[])")
+
+        # Join to tags if provided
+        join_tags = False
+        if tags:
+            join_tags = True
+            params.append(tags)
+            where.append(f"at.tag = ANY(${len(params)}::text[])")
+
+        if q:
+            params.append(f"%{q}%")
+            params.append(f"%{q}%")
+            where.append(f"(a.title ILIKE ${len(params)-1} OR a.content ILIKE ${len(params)})")
+
+        order_sql = {
+            "date_desc": "COALESCE(a.date_published, a.date_extracted) DESC, a.id DESC",
+            "date_asc": "COALESCE(a.date_published, a.date_extracted) ASC, a.id ASC",
+            "title": "a.title ASC, a.id DESC",
+        }.get(sort, "COALESCE(a.date_published, a.date_extracted) DESC, a.id DESC")
+
+        params.append(limit)
+        params.append(offset)
+
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+        sql = f"""
+        SELECT a.id, a.title, a.section, a.publication,
+               a.url, a.source_url, a.source_file,
+               a.page_number,
+               a.date_published, a.date_extracted, a.edition_date,
+               a.word_count, a.location_name, a.location_lat, a.location_lon,
+               COALESCE(s.summary_text, '') AS summary_text
+        FROM articles a
+        LEFT JOIN LATERAL (
+            SELECT summary_text
+            FROM summaries s
+            WHERE s.article_id = a.id AND s.summary_type = 'brief'
+            ORDER BY s.date_created DESC
+            LIMIT 1
+        ) s ON TRUE
+        { 'LEFT JOIN article_tags at ON at.article_id = a.id' if join_tags else '' }
+        {where_sql}
+        GROUP BY a.id, s.summary_text
+        ORDER BY {order_sql}
+        LIMIT ${len(params)-1} OFFSET ${len(params)}
+        """
+
+        async with self.get_connection() as conn:
+            rows = await conn.fetch(sql, *params)
+            out: List[Dict] = []
+            for r in rows:
+                out.append({
+                    'id': r['id'],
+                    'title': r['title'],
+                    'section': r['section'],
+                    'publication': r['publication'],
+                    'summary': r['summary_text'],
+                    'date_published': r['date_published'].isoformat() if r['date_published'] else None,
+                    'date_extracted': r['date_extracted'].isoformat() if r['date_extracted'] else None,
+                    'edition_date': r['edition_date'].isoformat() if r['edition_date'] else None,
+                    'word_count': r['word_count'],
+                    'location_name': r['location_name'],
+                    'url': r['url'],
+                    'source_url': r['source_url'],
+                })
+            return out
+
+    async def browse_facets(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        q: Optional[str] = None,
+    ) -> Dict[str, List[Dict]]:
+        """Return facet counts (publications, sections, tags) for a filtered window."""
+        where: List[str] = []
+        params: List = []
+        if date_from:
+            params.append(date_from)
+            where.append(f"COALESCE(edition_date, DATE(date_extracted)) >= ${len(params)}")
+        if date_to:
+            params.append(date_to)
+            where.append(f"COALESCE(edition_date, DATE(date_extracted)) <= ${len(params)}")
+        if q:
+            params.append(f"%{q}%"); params.append(f"%{q}%")
+            where.append(f"(title ILIKE ${len(params)-1} OR content ILIKE ${len(params)})")
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+        sql_pub = f"SELECT publication AS key, COUNT(*) AS count FROM articles {where_sql} GROUP BY publication ORDER BY count DESC NULLS LAST LIMIT 50"
+        sql_sec = f"SELECT section AS key, COUNT(*) AS count FROM articles {where_sql} GROUP BY section ORDER BY count DESC NULLS LAST LIMIT 100"
+        # tags join
+        sql_tags = f"""
+        SELECT at.tag AS key, COUNT(*) AS count
+        FROM article_tags at
+        JOIN articles a ON a.id = at.article_id
+        {where_sql.replace('WHERE', 'WHERE', 1)}
+        GROUP BY at.tag
+        ORDER BY count DESC NULLS LAST
+        LIMIT 100
+        """
+
+        async with self.get_connection() as conn:
+            pubs = await conn.fetch(sql_pub, *params)
+            secs = await conn.fetch(sql_sec, *params)
+            tags = await conn.fetch(sql_tags, *params)
+            def maprows(rows):
+                return [{ 'key': r['key'], 'count': r['count'] } for r in rows if r['key']]
+            return {
+                'publications': maprows(pubs),
+                'sections': maprows(secs),
+                'tags': maprows(tags),
+            }
+
     async def get_article_by_id(self, article_id: int) -> Optional[Dict]:
         sql_article = """
         SELECT a.*, COALESCE(s.summary_text, '') AS summary_text
