@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-analyzer-ops-backfill-controller
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops-backfill-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: news-analyzer
+      component: ops-backfill-controller
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: ops-backfill-controller
+    spec:
+      serviceAccountName: news-analyzer-ops-bot
+      imagePullSecrets:
+      - name: harbor-regcred
+      containers:
+      - name: controller
+        image: registry.harbor.lan/dockerhub-cache/bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: NAMESPACE
+          value: news-analyzer
+        - name: START
+          value: "2025-01-01"
+        - name: END
+          value: "2025-12-31"
+        - name: SPLIT
+          value: "weekly"
+        - name: FORCE
+          value: "1"
+        - name: MAX_NEW_PER_RUN
+          value: "6"
+        - name: LOOP_SLEEP
+          value: "600"
+        - name: PW_TRACE
+          value: "0"
+        - name: SCRAPER_PARALLELISM
+          value: "2"
+        - name: REQ_CPU
+          value: "2"
+        - name: REQ_MEM
+          value: "1Gi"
+        - name: LIM_CPU
+          value: "2"
+        - name: LIM_MEM
+          value: "3Gi"
+        command:
+        - /bin/bash
+        - -lc
+        - |
+          exec bash /app/controller.sh
+        volumeMounts:
+        - name: ops-scripts
+          mountPath: /app
+      volumes:
+      - name: ops-scripts
+        configMap:
+          name: news-analyzer-backfill-controller-scripts
