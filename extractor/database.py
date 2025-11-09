@@ -58,11 +58,17 @@ class StoredArticle:
     date_updated: datetime = None
     processing_status: str = 'extracted'  # 'extracted', 'summarized', 'notified'
     raw_html: Optional[str] = None
+    raw_text: Optional[str] = None
     metadata: Optional[Dict] = None
     location_name: Optional[str] = None
     location_lat: Optional[float] = None
     location_lon: Optional[float] = None
     event_dates: Optional[List[Dict]] = None
+    # Provenance
+    source_bucket: Optional[str] = None
+    source_object: Optional[str] = None
+    publication: Optional[str] = None
+    edition_date: Optional[date] = None
     
     def __post_init__(self):
         if not self.date_created:
@@ -228,11 +234,16 @@ class DatabaseManager:
 
         alter_sql = """
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS raw_html TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS raw_text TEXT;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS metadata JSONB;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS location_name TEXT;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS location_lat DOUBLE PRECISION;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS location_lon DOUBLE PRECISION;
         ALTER TABLE articles ADD COLUMN IF NOT EXISTS event_dates JSONB;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS source_bucket TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS source_object TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS publication TEXT;
+        ALTER TABLE articles ADD COLUMN IF NOT EXISTS edition_date DATE;
         """
 
         async with self.get_connection() as conn:
@@ -244,7 +255,8 @@ class DatabaseManager:
     async def store_articles(self, 
                            articles: List[Union[PDFArticle, HTMLArticle, StoredArticle]], 
                            source_identifier: str,
-                           source_type: str = 'unknown') -> Tuple[int, int]:
+                           source_type: str = 'unknown',
+                           source_bucket: Optional[str] = None) -> Tuple[int, int]:
         """
         Store articles in database with duplicate detection.
         
@@ -267,6 +279,8 @@ class DatabaseManager:
                 for article in articles:
                     # Convert article to StoredArticle format
                     stored_article = self._convert_to_stored_article(article, source_identifier, source_type)
+                    if source_bucket and not stored_article.source_bucket:
+                        stored_article.source_bucket = source_bucket
                     
                     # Check for duplicates
                     existing_id = await self._find_duplicate(conn, stored_article.content_hash)
@@ -315,10 +329,14 @@ class DatabaseManager:
             title, content, content_hash, url, source_type, source_url, source_file,
             page_number, column_number, section, author, tags, word_count,
             date_published, date_extracted, processing_status,
-            raw_html, metadata, location_name, location_lat, location_lon, event_dates
+            raw_html, raw_text, metadata, location_name, location_lat, location_lon, event_dates,
+            source_bucket, source_object, publication, edition_date
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-            $14, $15, $16, $17, $18, $19, $20, $21, $22
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13,
+            $14, $15, $16,
+            $17, $18, $19, $20, $21, $22, $23,
+            $24, $25, $26, $27
         ) RETURNING id
         """
         
@@ -345,11 +363,16 @@ class DatabaseManager:
             article.date_extracted,
             article.processing_status,
             article.raw_html,
+            article.raw_text,
             metadata_json,
             article.location_name,
             article.location_lat,
             article.location_lon,
-            event_dates_json
+            event_dates_json,
+            article.source_bucket,
+            article.source_object,
+            article.publication,
+            article.edition_date
         )
         
         return result['id']
@@ -409,7 +432,8 @@ class DatabaseManager:
             """
             SELECT section, author, tags, word_count, page_number, column_number,
                    date_published, metadata, raw_html, location_name, location_lat,
-                   location_lon, source_file, source_url, event_dates
+                   location_lon, source_file, source_url, event_dates,
+                   raw_text, source_bucket, source_object, publication, edition_date
             FROM articles WHERE id = $1
             """,
             article_id,
@@ -436,11 +460,16 @@ class DatabaseManager:
         date_published = new_article.date_published or existing.get('date_published')
 
         raw_html = new_article.raw_html if new_article.raw_html else existing.get('raw_html')
+        raw_text = new_article.raw_text if new_article.raw_text else existing.get('raw_text')
         location_name = new_article.location_name or existing.get('location_name')
         location_lat = new_article.location_lat if new_article.location_lat is not None else existing.get('location_lat')
         location_lon = new_article.location_lon if new_article.location_lon is not None else existing.get('location_lon')
         source_file = existing.get('source_file') or new_article.source_file
         source_url = existing.get('source_url') or new_article.source_url
+        source_bucket = existing.get('source_bucket') or new_article.source_bucket
+        source_object = existing.get('source_object') or new_article.source_object
+        publication = existing.get('publication') or new_article.publication
+        edition_date = existing.get('edition_date') or new_article.edition_date
 
         existing_events = self._ensure_event_list(existing.get('event_dates'))
         merged_events = existing_events
@@ -462,13 +491,18 @@ class DatabaseManager:
                 date_published = $7,
                 metadata = $8,
                 raw_html = $9,
-                location_name = $10,
-                location_lat = $11,
-                location_lon = $12,
-                source_file = $13,
-                source_url = $14,
-                event_dates = $15
-            WHERE id = $16
+                raw_text = $10,
+                location_name = $11,
+                location_lat = $12,
+                location_lon = $13,
+                source_file = $14,
+                source_url = $15,
+                event_dates = $16,
+                source_bucket = $17,
+                source_object = $18,
+                publication = $19,
+                edition_date = $20
+            WHERE id = $21
             """,
             section,
             author,
@@ -479,12 +513,17 @@ class DatabaseManager:
             date_published,
             metadata_json,
             raw_html,
+            raw_text,
             location_name,
             location_lat,
             location_lon,
             source_file,
             source_url,
             event_dates_json,
+            source_bucket,
+            source_object,
+            publication,
+            edition_date,
             article_id,
         )
 
@@ -622,6 +661,8 @@ class DatabaseManager:
             f"{article.title}{article.content}".encode('utf-8')
         ).hexdigest()
         
+        publication, edition_date = self._infer_pub_and_date(source_identifier)
+
         if isinstance(article, PDFArticle):
             stored = StoredArticle(
                 id=0,  # Will be set by database
@@ -636,6 +677,7 @@ class DatabaseManager:
                 word_count=article.word_count,
                 date_published=article.date_published,
                 date_extracted=datetime.utcnow(),
+                raw_text=article.content,
                 metadata={
                     'bounds': {
                         'x0': article.x0,
@@ -643,7 +685,10 @@ class DatabaseManager:
                         'x1': article.x1,
                         'y1': article.y1,
                     }
-                }
+                },
+                source_object=source_identifier,
+                publication=publication,
+                edition_date=edition_date
             )
             self._attach_events(stored)
             return stored
@@ -663,11 +708,15 @@ class DatabaseManager:
                 date_published=article.date_published,
                 date_extracted=datetime.utcnow(),
                 raw_html=article.raw_html,
+                raw_text=article.content,
                 metadata={'tags': article.tags} if article.tags else None,
                 location_name=getattr(article, 'location_name', None),
                 location_lat=getattr(article, 'location_lat', None),
                 location_lon=getattr(article, 'location_lon', None),
-                event_dates=getattr(article, 'event_dates', None)
+                event_dates=getattr(article, 'event_dates', None),
+                source_object=source_identifier,
+                publication=publication,
+                edition_date=edition_date
             )
             self._attach_events(stored)
             return stored
@@ -814,6 +863,43 @@ class DatabaseManager:
             
             logger.info(f"Cleaned up {deleted_count} old processing history records")
             return deleted_count
+
+    def _infer_pub_and_date(self, source_identifier: str) -> Tuple[Optional[str], Optional[date]]:
+        """Infer publication name and edition date from MinIO object key or file path.
+
+        Expected patterns: 'YYYY-MM-DD/<slug>_page_XXX_*.html|.pdf'.
+        """
+        try:
+            parts = source_identifier.split('/')
+            pub = None
+            ed = None
+            if parts:
+                # First path segment is usually the date
+                try:
+                    from datetime import datetime as _dt
+                    ed = _dt.strptime(parts[0], "%Y-%m-%d").date()
+                except Exception:
+                    ed = None
+            # Publication slug is the prefix before '_page'
+            tail = parts[-1] if parts else source_identifier
+            base = tail.split('.')[0]
+            slug = base.split('_page')[0]
+            # If slug includes date or other bits, fall back to second segment
+            if not slug or slug == base:
+                if len(parts) >= 2:
+                    slug = parts[1].rsplit('_page', 1)[0]
+            if slug:
+                pretty = slug.replace('-', ' ').strip()
+                # simple mapping for known papers
+                mapping = {
+                    'smyth county news messenger': 'Smyth County News & Messenger',
+                    'washington county news': 'Washington County News',
+                    'the news press': 'The News & Press',
+                }
+                pub = mapping.get(pretty.lower(), pretty.title())
+            return pub, ed
+        except Exception:
+            return None, None
 
 
 async def main():

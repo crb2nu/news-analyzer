@@ -245,9 +245,9 @@ class ExtractionProcessor:
                             article.metadata['publication'] = publication
                         if hasattr(article, 'section') and not article.section:
                             article.section = publication
-                # Store articles in database
+                # Store articles in database (include source bucket for provenance)
                 new_count, duplicate_count = await self.db_manager.store_articles(
-                    articles, object_name, file_type
+                    articles, object_name, file_type, source_bucket=self.settings.minio_bucket
                 )
                 
                 file_result['articles_new'] = new_count
@@ -333,9 +333,9 @@ class ExtractionProcessor:
             elif file_type == 'html':
                 articles = self.html_extractor.extract_from_file(file_path)
             
-            # Store in database
+            # Store in database (no bucket for local file processing)
             new_count, duplicate_count = await self.db_manager.store_articles(
-                articles, str(file_path), file_type
+                articles, str(file_path), file_type, source_bucket=None
             )
             
             end_time = datetime.utcnow()

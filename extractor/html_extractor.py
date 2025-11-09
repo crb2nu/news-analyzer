@@ -186,7 +186,7 @@ class HTMLExtractor:
             raise
     
     def _extract_main_article(self, html_content: str, source_url: Optional[str]) -> Optional[HTMLArticle]:
-        """Extract the main article using trafilatura."""
+        """Extract the main article using trafilatura, then enrich with JSON-LD/OG metadata."""
         try:
             # Extract with trafilatura
             extracted = trafilatura.extract(
@@ -227,7 +227,7 @@ class HTMLExtractor:
             
             title = self._resolve_title(data.get('title'), content, source_url)
 
-            return HTMLArticle(
+            base_article = HTMLArticle(
                 title=title,
                 content=content,
                 url=source_url,
@@ -237,6 +237,74 @@ class HTMLExtractor:
                 tags=tags if tags else None,
                 raw_html=html_content if self.include_raw_html else None
             )
+
+            # Enrich with JSON-LD / OpenGraph / meta keywords if present
+            try:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                # JSON-LD NewsArticle
+                for script in soup.find_all('script', type=lambda t: t and 'ld+json' in t):
+                    try:
+                        import json as _json
+                        payload = _json.loads(script.string or '{}')
+                        # Some pages wrap JSON-LD in a list
+                        candidates = payload if isinstance(payload, list) else [payload]
+                        for obj in candidates:
+                            tname = (obj.get('@type') or '').lower()
+                            if tname in ('newsarticle', 'article'):
+                                base_article.author = base_article.author or (obj.get('author') or {}).get('name') if isinstance(obj.get('author'), dict) else obj.get('author')
+                                base_article.section = base_article.section or obj.get('articleSection')
+                                if obj.get('keywords'):
+                                    kws = obj.get('keywords')
+                                    if isinstance(kws, str):
+                                        kws = [k.strip() for k in kws.split(',') if k.strip()]
+                                    base_article.tags = (base_article.tags or []) + kws
+                                if obj.get('datePublished') and not base_article.date_published:
+                                    try:
+                                        base_article.date_published = datetime.fromisoformat(obj['datePublished'].replace('Z','+00:00'))
+                                    except Exception:
+                                        pass
+                                # Prefer articleBody if longer
+                                body = obj.get('articleBody')
+                                if isinstance(body, str) and len(body.split()) > len(base_article.content.split()):
+                                    base_article.content = body
+                    except Exception:
+                        continue
+
+                # OpenGraph
+                def _og(name):
+                    tag = soup.find('meta', attrs={'property': f'og:{name}'})
+                    return tag.get('content') if tag and tag.get('content') else None
+
+                og_title = _og('title')
+                if og_title and len(og_title) > len(base_article.title):
+                    base_article.title = og_title[:200]
+                og_section = soup.find('meta', attrs={'property': 'article:section'})
+                if og_section and og_section.get('content') and not base_article.section:
+                    base_article.section = og_section['content']
+                og_time = soup.find('meta', attrs={'property': 'article:published_time'})
+                if og_time and og_time.get('content') and not base_article.date_published:
+                    try:
+                        base_article.date_published = datetime.fromisoformat(og_time['content'].replace('Z','+00:00'))
+                    except Exception:
+                        pass
+
+                # Keywords meta
+                kw = soup.find('meta', attrs={'name': 'keywords'})
+                if kw and kw.get('content'):
+                    extra = [x.strip() for x in kw['content'].split(',') if x.strip()]
+                    base_article.tags = (base_article.tags or []) + extra
+            except Exception:
+                pass
+
+            # Normalize unique tags list
+            if base_article.tags:
+                uniq = []
+                for t in base_article.tags:
+                    if t and t not in uniq:
+                        uniq.append(t)
+                base_article.tags = uniq
+
+            return base_article
             
         except Exception as e:
             logger.warning(f"Trafilatura extraction failed: {str(e)}")
