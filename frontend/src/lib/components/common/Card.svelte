@@ -17,7 +17,16 @@
 		hoverable && 'hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 dark:hover:border-slate-600 cursor-pointer',
 		className
 	)}
+	role={hoverable ? 'button' : undefined}
+	tabindex={hoverable ? 0 : undefined}
 	on:click
+	on:keydown={(e) => {
+		if (!hoverable) return;
+		if (e.key === 'Enter' || e.key === ' ') {
+			(e.currentTarget as HTMLElement).click();
+			e.preventDefault();
+		}
+	}}
 >
 	<slot />
 </div>

@@ -25,13 +25,11 @@
 </script>
 
 <article
-	class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6 transition-all duration-200 hover:shadow-md hover:border-slate-300 dark:hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-	class:opacity-60={read}
-	class:hover:opacity-80={read}
-	data-article-id={article.id}
-	tabindex="0"
-	role="article"
-	aria-labelledby="article-title-{article.id}"
+    class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6 transition-all duration-200 hover:shadow-md hover:border-slate-300 dark:hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+    class:opacity-60={read}
+    class:hover:opacity-80={read}
+    data-article-id={article.id}
+    aria-labelledby="article-title-{article.id}"
 >
 	<!-- Header -->
 	<div class="flex items-start justify-between gap-4 mb-3">

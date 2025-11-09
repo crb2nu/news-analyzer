@@ -439,7 +439,7 @@ def _escape_graphql_string(s: str) -> str:
 async def get_trending(kind: str = "section", date_str: Optional[str] = None, limit: int = 20):
     """Top trending items for a given day and kind.
 
-    kind: section|tag|entity|topic
+    kind: section|publication|tag|entity|topic
     """
     if _service is None:
         raise HTTPException(status_code=503, detail="Service not initialized")

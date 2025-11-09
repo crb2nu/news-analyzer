@@ -11,10 +11,13 @@
 	import TrendCard from '$lib/components/charts/TrendCard.svelte';
 	import { BarChart3, TrendingUp, Tag, Users } from 'lucide-svelte';
 
-	// Get trending data for different types
-	$: trendingSectionsQuery = createQuery({
-		queryKey: ['trending', 'section'],
-		queryFn: () => getTrending('section', undefined, 10)
+	// Coverage kind toggle (section | publication)
+	let coverageKind: 'section' | 'publication' = 'publication';
+
+	// Get trending data for coverage
+	$: trendingCoverageQuery = createQuery({
+		queryKey: ['trending', coverageKind],
+		queryFn: () => getTrending(coverageKind, undefined, 10)
 	});
 
 	$: trendingTagsQuery = createQuery({
@@ -27,18 +30,17 @@
 		queryFn: () => getTrending('entity', undefined, 10)
 	});
 
-	// Get timeline for top section
-	$: topSectionKey = $trendingSectionsQuery.data?.[0]?.key;
-
-	$: topSectionTimelineQuery = createQuery({
-		queryKey: ['timeline', 'section', topSectionKey],
-		queryFn: () => getTimeline('section', topSectionKey!, 30),
-		enabled: !!topSectionKey
+	// Get timeline for top coverage item
+	$: topCoverageKey = $trendingCoverageQuery.data?.[0]?.key;
+	$: topCoverageTimelineQuery = createQuery({
+		queryKey: ['timeline', coverageKind, topCoverageKey],
+		queryFn: () => getTimeline(coverageKind, topCoverageKey!, 30),
+		enabled: !!topCoverageKey
 	});
 
 	// Prepare bar chart data from trending sections
 	$: sectionBarData =
-		$trendingSectionsQuery.data?.slice(0, 8).map((item) => ({
+		$trendingCoverageQuery.data?.slice(0, 8).map((item) => ({
 			label: item.key,
 			value: item.score,
 			color: item.zscore && item.zscore > 2 ? 'rgb(239, 68, 68)' : item.zscore && item.zscore > 1 ? 'rgb(245, 158, 11)' : 'rgb(59, 130, 246)'
@@ -69,9 +71,15 @@
 			<Card elevated={true}>
 				<div class="flex items-center gap-2 mb-4">
 					<BarChart3 class="w-5 h-5 text-blue-600" />
-					<h2 class="text-xl font-semibold">Coverage by Section</h2>
+					<h2 class="text-xl font-semibold">Coverage by {coverageKind === 'publication' ? 'Publication' : 'Section'}</h2>
+					<div class="ml-auto">
+						<select class="select select-sm" bind:value={coverageKind} aria-label="Coverage kind">
+							<option value="publication">Publication</option>
+							<option value="section">Section</option>
+						</select>
+					</div>
 				</div>
-				{#if $trendingSectionsQuery.isLoading}
+				{#if $trendingCoverageQuery.isLoading}
 					<SkeletonChart type="bar" height={300} />
 				{:else if sectionBarData.length > 0}
 					<BarChart data={sectionBarData} height={300} />
@@ -87,14 +95,14 @@
 				<div class="flex items-center gap-2 mb-4">
 					<TrendingUp class="w-5 h-5 text-green-600" />
 					<h2 class="text-xl font-semibold">
-						{topSectionKey ? `${topSectionKey} - 30 Day Trend` : 'Section Trend'}
+						{topCoverageKey ? `${topCoverageKey} - 30 Day Trend` : 'Trend'}
 					</h2>
 				</div>
-				{#if $topSectionTimelineQuery.isLoading}
+				{#if $topCoverageTimelineQuery.isLoading}
 					<SkeletonChart type="line" height={250} />
-				{:else if $topSectionTimelineQuery.data && $topSectionTimelineQuery.data.length > 0}
+				{:else if $topCoverageTimelineQuery.data && $topCoverageTimelineQuery.data.length > 0}
 					<TimelineChart
-						data={$topSectionTimelineQuery.data}
+						data={$topCoverageTimelineQuery.data}
 						height={250}
 						color="rgb(34, 197, 94)"
 						yAxisLabel="Articles"
@@ -165,13 +173,13 @@
 			<Card elevated={true} hoverable={true}>
 				<div class="text-center py-4">
 					<div class="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-1">
-						{#if $trendingSectionsQuery.isLoading}
+						{#if $trendingCoverageQuery.isLoading}
 							<LoadingSpinner size="sm" />
 						{:else}
-							<AnimatedCounter value={$trendingSectionsQuery.data?.length || 0} />
+							<AnimatedCounter value={$trendingCoverageQuery.data?.length || 0} />
 						{/if}
 					</div>
-					<div class="text-sm text-slate-600 dark:text-slate-400">Active Sections</div>
+					<div class="text-sm text-slate-600 dark:text-slate-400">Active {coverageKind === 'publication' ? 'Publications' : 'Sections'}</div>
 				</div>
 			</Card>
 		</div>

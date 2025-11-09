@@ -79,4 +79,4 @@ export interface FeedFilters {
 	search?: string;
 }
 
-export type TrendingKind = 'section' | 'tag' | 'entity' | 'topic';
+export type TrendingKind = 'section' | 'publication' | 'tag' | 'entity' | 'topic';

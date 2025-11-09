@@ -56,6 +56,10 @@ class AnalysisJob:
             SELECT $1::date AS day, 'section' AS kind, COALESCE(NULLIF(section,''),'General') AS key, COUNT(*)::int AS cnt, NULL::real AS sum_score
             FROM a GROUP BY key
         ),
+        by_publication AS (
+            SELECT $1::date AS day, 'publication' AS kind, COALESCE(NULLIF(publication,''),'(unknown)') AS key, COUNT(*)::int AS cnt, NULL::real AS sum_score
+            FROM a GROUP BY key
+        ),
         by_tag AS (
             SELECT $1::date AS day, 'tag' AS kind, t.tag AS key, COUNT(*)::int AS cnt, NULL::real AS sum_score
             FROM a JOIN article_tags t ON t.article_id = a.id
@@ -78,6 +82,7 @@ class AnalysisJob:
             UNION ALL SELECT * FROM by_tag
             UNION ALL SELECT * FROM by_topic
             UNION ALL SELECT * FROM by_entity
+            UNION ALL SELECT * FROM by_publication
         )
         INSERT INTO daily_metrics(metric_date, kind, key, count, sum_score)
         SELECT day, kind, key, cnt, sum_score FROM unioned

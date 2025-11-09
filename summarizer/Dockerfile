@@ -1,3 +1,5 @@
+ARG PYTHON_BASE=registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
+
 FROM node:20-slim AS frontend-builder
 
 WORKDIR /frontend
@@ -13,7 +15,6 @@ ENV PUBLIC_API_BASE_URL=""
 RUN npm run build
 
 # Python application stage
-ARG PYTHON_BASE=registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
 FROM ${PYTHON_BASE}
 
 WORKDIR /app
