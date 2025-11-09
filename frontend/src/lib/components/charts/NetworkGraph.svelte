@@ -192,7 +192,13 @@
 						on:mouseleave={handleNodeMouseLeave}
 						on:click={() => handleNodeClick(node)}
 						role="button"
-						tabindex="0"
+						tabindex={0}
+						on:keydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								handleNodeClick(node);
+								e.preventDefault();
+							}
+						}}
 					>
 						{#if isHovered || isSelected}
 							<circle

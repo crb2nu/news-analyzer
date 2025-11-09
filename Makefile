@@ -189,6 +189,10 @@ scrape-range:
 	  "        image: registry.harbor.lan/library/news-analyzer-scraper:latest" \
 	  "        imagePullPolicy: Always" \
 	  "        env:" \
+	  "        - name: PW_TRACE" \
+	  "          value: \"0\"" \
+	  "        - name: SCRAPER_PARALLELISM" \
+	  "          value: \"2\"" \
 	  "        - name: HOME" \
 	  "          value: /home/scraper" \
 	  "        - name: PLAYWRIGHT_BROWSERS_PATH" \
@@ -254,10 +258,10 @@ scrape-range:
 	  "        resources:" \
   "          requests:" \
   "            memory: \"1Gi\"" \
-  "            cpu: \"4\"" \
+  "            cpu: \"2\"" \
   "          limits:" \
-  "            memory: \"2Gi\"" \
-  "            cpu: \"4\"" \
+  "            memory: \"3Gi\"" \
+  "            cpu: \"2\"" \
 	  "        command:" \
 	  "        - /bin/sh" \
 	  "        - -c" \

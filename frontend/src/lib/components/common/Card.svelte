@@ -9,24 +9,28 @@
 	export { className as class };
 </script>
 
-<div
-	class={cn(
-		'bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 transition-[box-shadow,transform,border-color] duration-200',
-		padding && 'p-6',
-		elevated ? 'shadow-md hover:shadow-lg' : 'shadow-sm',
-		hoverable && 'hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 dark:hover:border-slate-600 cursor-pointer',
-		className
-	)}
-	role={hoverable ? 'button' : undefined}
-	tabindex={hoverable ? 0 : undefined}
-	on:click
-	on:keydown={(e) => {
-		if (!hoverable) return;
-		if (e.key === 'Enter' || e.key === ' ') {
-			(e.currentTarget as HTMLElement).click();
-			e.preventDefault();
-		}
-	}}
->
-	<slot />
-</div>
+{#if hoverable}
+  <button
+    type="button"
+    class={cn(
+      'bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 transition-[box-shadow,transform,border-color] duration-200',
+      padding && 'p-6',
+      elevated ? 'shadow-md hover:shadow-lg' : 'shadow-sm',
+      'hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 dark:hover:border-slate-600 cursor-pointer',
+      className
+    )}
+  >
+    <slot />
+  </button>
+{:else}
+  <div
+    class={cn(
+      'bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 transition-[box-shadow,transform,border-color] duration-200',
+      padding && 'p-6',
+      elevated ? 'shadow-md hover:shadow-lg' : 'shadow-sm',
+      className
+    )}
+  >
+    <slot />
+  </div>
+{/if}

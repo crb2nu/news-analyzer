@@ -108,6 +108,14 @@
 					class="cursor-pointer transition-all hover:fill-blue-600"
 					on:mouseenter={() => handleMouseEnter(event)}
 					on:mouseleave={handleMouseLeave}
+					role="button"
+					tabindex="0"
+					on:keydown={(e) => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							handleMouseEnter(event);
+							e.preventDefault();
+						}
+					}}
 				>
 					<title>{event.title}</title>
 				</circle>

@@ -198,13 +198,6 @@ class TraceHelper:
     def stop(self, name: str) -> Optional[Path]:
         if not self._enabled:
             return None
-
-def proxy_label_from_settings(settings) -> str:
-    try:
-        server = settings.get_playwright_proxy().get("server")
-        return server or "direct"
-    except Exception:
-        return "direct"
         try:
             path = traces_dir() / f"{name}.zip"
             self.context.tracing.stop(path=str(path))
@@ -212,3 +205,11 @@ def proxy_label_from_settings(settings) -> str:
         except Exception:
             logging.getLogger(__name__).debug("tracing.stop failed", exc_info=True)
             return None
+
+
+def proxy_label_from_settings(settings) -> str:
+    try:
+        server = settings.get_playwright_proxy().get("server")
+        return server or "direct"
+    except Exception:
+        return "direct"

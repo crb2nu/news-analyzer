@@ -179,6 +179,11 @@ class EditionDiscoverer:
                     th.stop(f"discover_{slug}_{target_date.isoformat()}")
                 except Exception:
                     pass
+                finally:
+                    with suppress(Exception):
+                        page.close()
+                    with suppress(Exception):
+                        context.close()
                 return edition
                 
         except Exception as e:
