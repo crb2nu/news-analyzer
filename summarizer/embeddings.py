@@ -43,7 +43,8 @@ async def embed_local(texts: List[str], model_name: str = "BAAI/bge-small-en-v1.
 async def embed_with_fallback(texts: List[str]) -> List[List[float]]:
     """Try LiteLLM/OpenAI first; fall back to local on failure if enabled."""
     api_key = os.getenv('OPENAI_API_KEY') or ''
-    base_url = os.getenv('OPENAI_API_BASE') or os.getenv('OPENAI_EMBED_BASE')
+    # Prefer dedicated embedding base so we can send completions to vLLM and embeddings to LiteLLM
+    base_url = os.getenv('OPENAI_EMBED_BASE') or os.getenv('OPENAI_API_BASE')
     model = os.getenv('OPENAI_EMBED_MODEL', 'text-embedding-3-small')
     enable_local = os.getenv('ENABLE_LOCAL_EMBED', 'false').lower() == 'true'
     local_name = os.getenv('LOCAL_EMBED_MODEL', 'BAAI/bge-small-en-v1.5')

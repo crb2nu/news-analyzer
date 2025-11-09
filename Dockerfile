@@ -1,7 +1,8 @@
 # Multi-stage build for all components
 
 # ===== SCRAPER =====
-FROM python:3.11-slim AS scraper
+ARG PYTHON_BASE=registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
+FROM ${PYTHON_BASE} AS scraper
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -15,7 +16,7 @@ COPY scraper/ ./
 CMD ["python", "-m", "scraper"]
 
 # ===== EXTRACTOR =====
-FROM python:3.11-slim AS extractor
+FROM ${PYTHON_BASE} AS extractor
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -29,7 +30,7 @@ COPY extractor/ ./
 CMD ["python", "-m", "extractor"]
 
 # ===== SUMMARIZER =====
-FROM python:3.11-slim AS summarizer
+FROM ${PYTHON_BASE} AS summarizer
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -43,7 +44,7 @@ COPY summarizer/ ./
 CMD ["python", "-m", "summarizer"]
 
 # ===== NOTIFIER =====
-FROM python:3.11-slim AS notifier
+FROM ${PYTHON_BASE} AS notifier
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \

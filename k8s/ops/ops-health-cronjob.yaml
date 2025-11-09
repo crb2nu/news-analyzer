@@ -24,7 +24,7 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: health
-            image: python:3.11-slim
+            image: registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
             imagePullPolicy: IfNotPresent
             env:
             - name: TZ
@@ -64,4 +64,3 @@ spec:
           - name: ops-scripts
             configMap:
               name: news-analyzer-ops-scripts
-

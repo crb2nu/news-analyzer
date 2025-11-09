@@ -50,7 +50,7 @@ spec:
                   name: news-analyzer-secrets
                   key: WEAVIATE_API_KEY
                   optional: true
-            - name: OPENAI_API_BASE
+            - name: OPENAI_EMBED_BASE
               value: "http://litellm.ai.svc.cluster.local:8000/v1"
             - name: OPENAI_EMBED_MODEL
               value: "text-embedding-3-small"

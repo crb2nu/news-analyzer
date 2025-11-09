@@ -1,5 +1,6 @@
 # Multi-stage build for the news analyzer scraper
-FROM python:3.11-slim as base
+ARG PYTHON_BASE=registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
+FROM ${PYTHON_BASE} as base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -64,7 +65,7 @@ RUN /app/.venv/bin/playwright install chromium firefox && \
     /app/.venv/bin/playwright install-deps chromium firefox
 
 # Production stage
-FROM python:3.11-slim as production
+FROM ${PYTHON_BASE} as production
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

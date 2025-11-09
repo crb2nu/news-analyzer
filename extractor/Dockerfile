@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+ARG PYTHON_BASE=registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
+FROM ${PYTHON_BASE}
 
 WORKDIR /app
 

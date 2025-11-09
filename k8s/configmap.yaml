@@ -28,6 +28,9 @@ data:
   PROXY_ROTATION_ENABLED: "true"
   CACHE_RETENTION_DAYS: "7"
   SCRAPER_USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  NWS_USER_AGENT: "news-analyzer-osint/0.1 (k3s)"
+  NWS_ZONES: "VAZ022,VAZ023,VAZ024,NCZ001,TNZ019"
+  NWS_BBOX: "-82.8,36.5,-80.0,37.8"
   
   # OpenAI configuration
   OPENAI_MODEL: "qwen3-14b-awq"
