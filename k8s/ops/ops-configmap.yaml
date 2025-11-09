@@ -48,6 +48,19 @@ data:
         running = sum(1 for p in pods.items if (p.status and p.status.phase == "Running"))
         return running, total
 
+    def count_oom_killed(v1: client.CoreV1Api):
+        pods = v1.list_namespaced_pod(NAMESPACE, label_selector="component=scraper,type=backfill").items
+        cnt = 0
+        for p in pods:
+            if not p.status or not p.status.container_statuses:
+                continue
+            for cs in p.status.container_statuses:
+                term = (cs.last_state and cs.last_state.terminated) or (cs.state and cs.state.terminated)
+                if term and getattr(term, "reason", "") == "OOMKilled":
+                    cnt += 1
+                    break
+        return cnt
+
     def count_pending_jobs(b1: client.BatchV1Api):
         jobs = b1.list_namespaced_job(NAMESPACE)
         pending = 0
@@ -99,6 +112,7 @@ data:
 
         running, total = count_pods(v1)
         pending_jobs = count_pending_jobs(b1)
+        oom = count_oom_killed(v1)
 
         summarizer_ok = check_http(SUMMARIZER_URL)
         minio_ok = check_http(MINIO_HEALTH_URL)
@@ -114,7 +128,7 @@ data:
             priority = 3
 
         msg = (
-            f"Health: {status} | Pods: {running}/{total} | Pending Jobs: {pending_jobs} | "
+            f"Health: {status} | Pods: {running}/{total} | Pending Jobs: {pending_jobs} | OOMKilled(backfill): {oom} | "
             f"Summarizer: {'OK' if summarizer_ok else 'FAIL'} | "
             f"MinIO: {'OK' if minio_ok else 'FAIL'} | "
             f"PostgreSQL: {'OK' if pg_ok else 'FAIL'} | "
@@ -238,6 +252,208 @@ data:
                 }
             }
         }
+
+  backfill_topup.py: |
+    import os
+    from datetime import datetime, timedelta, date
+    from typing import List, Tuple
+
+    from kubernetes import client, config
+
+    NAMESPACE = os.getenv("NAMESPACE", "news-analyzer")
+    START = os.getenv("START", "2025-01-01")
+    END = os.getenv("END", "2025-09-30")
+    SPLIT = os.getenv("SPLIT", "weekly")  # weekly|daily|biweekly
+    PUBLICATIONS = os.getenv(
+        "PUBLICATIONS",
+        "Smyth County News & Messenger,The News & Press,The Bland County Messenger,The Floyd Press,Wytheville Enterprise,Washington County News",
+    )
+    FORCE = os.getenv("FORCE", "0") in ("1", "true", "True")
+    PW_TRACE = os.getenv("PW_TRACE", "0")
+    SCRAPER_PARALLELISM = os.getenv("SCRAPER_PARALLELISM", "2")
+    MAX_NEW_PER_RUN = int(os.getenv("MAX_NEW_PER_RUN", "5"))
+
+    REQ_CPU = os.getenv("REQ_CPU", "2")
+    REQ_MEM = os.getenv("REQ_MEM", "1Gi")
+    LIM_CPU = os.getenv("LIM_CPU", "2")
+    LIM_MEM = os.getenv("LIM_MEM", "3Gi")
+
+    def load_kube_config():
+        try:
+            config.load_incluster_config()
+        except Exception:
+            config.load_kube_config()
+
+    def parse_date(s: str) -> date:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+
+    def iter_windows(start: date, end: date, unit: str):
+        cur = start
+        while cur <= end:
+            if unit == "daily":
+                s, e = cur, cur
+            elif unit == "biweekly":
+                s, e = cur, min(end, cur + timedelta(days=13))
+            else:
+                s, e = cur, min(end, cur + timedelta(days=6))
+            # keep only windows with at least one Wed/Sat
+            keep = False
+            d = s
+            while d <= e:
+                if d.weekday() in (2, 5):
+                    keep = True
+                    break
+                d += timedelta(days=1)
+            if keep:
+                yield s, e
+            cur = e + timedelta(days=1)
+
+    def job_exists(batch: client.BatchV1Api, s: date, e: date) -> bool:
+        key = f"win-start={s.strftime('%Y%m%d')},win-end={e.strftime('%Y%m%d')}"
+        jobs = batch.list_namespaced_job(
+            NAMESPACE,
+            label_selector=f"component=scraper,type=backfill,{key}",
+        )
+        return bool(jobs.items)
+
+    def capacity(batch: client.BatchV1Api, core: client.CoreV1Api) -> int:
+        # Try to respect the ResourceQuota count/jobs.batch if present
+        try:
+            rq = core.read_namespaced_resource_quota("news-analyzer-quota", NAMESPACE)
+            hard = (rq.status and rq.status.hard) or (rq.spec and rq.spec.hard) or {}
+            limit = int(hard.get("count/jobs.batch", 40))
+        except Exception:
+            limit = 40
+        try:
+            cur = batch.list_namespaced_job(NAMESPACE)
+            used = len(cur.items)
+        except Exception:
+            used = 0
+        return max(0, limit - used)
+
+    def build_job(s: date, e: date) -> client.V1Job:
+        meta = client.V1ObjectMeta(
+            generate_name=f"scraper-backfill-",
+            namespace=NAMESPACE,
+            labels={
+                "app": "news-analyzer",
+                "component": "scraper",
+                "type": "backfill",
+                "win-start": s.strftime("%Y%m%d"),
+                "win-end": e.strftime("%Y%m%d"),
+            },
+        )
+        env = [
+            client.V1EnvVar(name="PW_TRACE", value=PW_TRACE),
+            client.V1EnvVar(name="SCRAPER_PARALLELISM", value=SCRAPER_PARALLELISM),
+            client.V1EnvVar(name="HOME", value="/home/scraper"),
+            client.V1EnvVar(name="PLAYWRIGHT_BROWSERS_PATH", value="/home/scraper/.cache/ms-playwright"),
+            client.V1EnvVar(name="EEDITION_USER", value_from=client.V1EnvVarSource(secret_key_ref=client.V1SecretKeySelector(name="news-analyzer-secrets", key="EEDITION_USER"))),
+            client.V1EnvVar(name="EEDITION_PASS", value_from=client.V1EnvVarSource(secret_key_ref=client.V1SecretKeySelector(name="news-analyzer-secrets", key="EEDITION_PASS"))),
+            client.V1EnvVar(name="SMARTPROXY_USERNAME", value_from=client.V1EnvVarSource(secret_key_ref=client.V1SecretKeySelector(name="news-analyzer-secrets", key="SMARTPROXY_USERNAME"))),
+            client.V1EnvVar(name="SMARTPROXY_PASSWORD", value_from=client.V1EnvVarSource(secret_key_ref=client.V1SecretKeySelector(name="news-analyzer-secrets", key="SMARTPROXY_PASSWORD"))),
+            client.V1EnvVar(name="SMARTPROXY_HOST", value_from=client.V1EnvVarSource(config_map_key_ref=client.V1ConfigMapKeySelector(name="news-analyzer-config", key="SMARTPROXY_HOST"))),
+            client.V1EnvVar(name="MINIO_ENDPOINT", value_from=client.V1EnvVarSource(config_map_key_ref=client.V1ConfigMapKeySelector(name="news-analyzer-config", key="MINIO_ENDPOINT"))),
+            client.V1EnvVar(name="MINIO_ACCESS_KEY", value_from=client.V1EnvVarSource(secret_key_ref=client.V1SecretKeySelector(name="news-analyzer-secrets", key="MINIO_ACCESS_KEY"))),
+            client.V1EnvVar(name="MINIO_SECRET_KEY", value_from=client.V1EnvVarSource(secret_key_ref=client.V1SecretKeySelector(name="news-analyzer-secrets", key="MINIO_SECRET_KEY"))),
+            client.V1EnvVar(name="MINIO_BUCKET", value_from=client.V1EnvVarSource(config_map_key_ref=client.V1ConfigMapKeySelector(name="news-analyzer-config", key="MINIO_BUCKET"))),
+            client.V1EnvVar(name="SCRAPER_USER_AGENT", value_from=client.V1EnvVarSource(config_map_key_ref=client.V1ConfigMapKeySelector(name="news-analyzer-config", key="SCRAPER_USER_AGENT"))),
+            client.V1EnvVar(name="START_DATE", value=s.isoformat()),
+            client.V1EnvVar(name="END_DATE", value=e.isoformat()),
+            client.V1EnvVar(name="FORCE_DOWNLOAD", value="1" if FORCE else "0"),
+            client.V1EnvVar(name="PUBLICATIONS", value=PUBLICATIONS),
+        ]
+
+        cmd = [
+            "/bin/sh",
+            "-c",
+            "\n".join([
+                "set -e",
+                "mkdir -p /app/storage",
+                "python - <<'PY' > /tmp/download-dates.txt",
+                "from datetime import datetime, timedelta",
+                "import os",
+                "start = datetime.strptime(os.environ['START_DATE'], '%Y-%m-%d').date()",
+                "end = datetime.strptime(os.environ['END_DATE'], '%Y-%m-%d').date()",
+                "cur = start",
+                "while cur <= end:",
+                "    if cur.weekday() in (2, 5):",
+                "        print(cur.isoformat())",
+                "    cur += timedelta(days=1)",
+                "PY",
+                "PUB_LIST=\"${PUBLICATIONS}\"",
+                "while read d; do",
+                "  [ -z \"$d\" ] && continue",
+                "  echo Processing edition $d",
+                "  extra=\"\"; [ \"$FORCE_DOWNLOAD\" = \"1\" ] && extra=\"--force\"",
+                "  OLD_IFS=\"$IFS\"; IFS=,; for pub in $PUB_LIST; do",
+                "    pub_trim=$(echo \"$pub\" | sed -e 's/^ *//' -e 's/ *$//')",
+                "    [ -z \"$pub_trim\" ] && continue",
+                "    echo \"  -> $pub_trim\"",
+                "    python -m scraper.downloader --date \"$d\" $extra --publication \"$pub_trim\" --storage /app/storage/storage_state.json",
+                "    sleep 1",
+                "  done; IFS=\"$OLD_IFS\"",
+                "done < /tmp/download-dates.txt",
+            ]),
+        ]
+
+        resources = client.V1ResourceRequirements(
+            requests={"cpu": REQ_CPU, "memory": REQ_MEM},
+            limits={"cpu": LIM_CPU, "memory": LIM_MEM},
+        )
+
+        c = client.V1Container(
+            name="scraper",
+            image="registry.harbor.lan/library/news-analyzer-scraper:latest",
+            image_pull_policy="Always",
+            env=env,
+            command=cmd,
+            resources=resources,
+            volume_mounts=[
+                client.V1VolumeMount(name="session-storage", mount_path="/app/storage"),
+                client.V1VolumeMount(name="scraper-login-override", mount_path="/app/scraper/login.py", sub_path="login.py"),
+                client.V1VolumeMount(name="scraper-discover-override", mount_path="/app/scraper/discover.py", sub_path="discover.py"),
+            ],
+        )
+
+        pod = client.V1PodSpec(
+            restart_policy="Never",
+            image_pull_secrets=[client.V1LocalObjectReference(name="harbor-regcred")],
+            security_context=client.V1PodSecurityContext(run_as_non_root=True, run_as_user=1000, fs_group=1000),
+            containers=[c],
+            volumes=[
+                client.V1Volume(name="session-storage", empty_dir=client.V1EmptyDirVolumeSource()),
+                client.V1Volume(name="scraper-login-override", config_map=client.V1ConfigMapVolumeSource(name="scraper-login-override")),
+                client.V1Volume(name="scraper-discover-override", config_map=client.V1ConfigMapVolumeSource(name="scraper-discover-override")),
+            ],
+        )
+
+        tpl = client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels=meta.labels.copy()), spec=pod)
+        spec = client.V1JobSpec(template=tpl, backoff_limit=0, ttl_seconds_after_finished=172800)
+        return client.V1Job(api_version="batch/v1", kind="Job", metadata=meta, spec=spec)
+
+    def main():
+        load_kube_config()
+        batch = client.BatchV1Api()
+        core = client.CoreV1Api()
+
+        start = parse_date(START)
+        end = parse_date(END)
+
+        cap = min(capacity(batch, core), MAX_NEW_PER_RUN)
+        created = 0
+        for s, e in iter_windows(start, end, SPLIT):
+            if created >= cap:
+                break
+            if job_exists(batch, s, e):
+                continue
+            job = build_job(s, e)
+            batch.create_namespaced_job(namespace=NAMESPACE, body=job)
+            created += 1
+        print(f"Backfill top-up created {created} new jobs (cap {cap}).")
+
+    if __name__ == "__main__":
+        main()
         batch.patch_namespaced_cron_job(name=name, namespace=NAMESPACE, body=body)
 
     def patch_deployment_image(apps: client.AppsV1Api, name: str, container: str, image: str):
@@ -281,4 +497,3 @@ data:
 
     if __name__ == "__main__":
         main()
-

@@ -37,6 +37,10 @@ spec:
               DATE=$(date +%Y-%m-%d)
               python -m scraper.downloader --date $DATE --storage /app/storage/storage_state.json
             env:
+            - name: PW_TRACE
+              value: "0"
+            - name: SCRAPER_PARALLELISM
+              value: "2"
             - name: METRICS_LABEL_component
               value: scraper
             - name: METRICS_LABEL_namespace
@@ -115,11 +119,11 @@ spec:
                   key: SCRAPER_USER_AGENT
             resources:
               requests:
-                memory: "512Mi"
-                cpu: "250m"
-              limits:
-                memory: "1Gi"
+                memory: "768Mi"
                 cpu: "500m"
+              limits:
+                memory: "2Gi"
+                cpu: "1"
             volumeMounts:
             - name: session-storage
               mountPath: /app/storage
@@ -182,6 +186,8 @@ spec:
               chmod 755 /home/scraper
               python -m scraper.login --storage /app/storage/storage_state.json
             env:
+            - name: PW_TRACE
+              value: "0"
             - name: METRICS_LABEL_component
               value: auth_refresh
             - name: METRICS_LABEL_namespace
@@ -233,12 +239,12 @@ spec:
                 configMapKeyRef:
                   name: news-analyzer-config
                   key: SMARTPROXY_HOST
-            resources:
-              requests:
+           resources:
+             requests:
                 memory: "512Mi"
                 cpu: "250m"
-              limits:
-                memory: "1Gi"
+             limits:
+                memory: "1.5Gi"
                 cpu: "500m"
             volumeMounts:
             - name: session-storage

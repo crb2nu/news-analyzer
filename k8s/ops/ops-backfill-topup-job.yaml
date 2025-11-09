@@ -1,0 +1,288 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: news-analyzer-ops-backfill-topup
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops-backfill
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: ops-backfill
+    spec:
+      serviceAccountName: news-analyzer-ops-bot
+      restartPolicy: Never
+      containers:
+      - name: topup
+        image: registry.harbor.lan/dockerhub-cache/bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: NAMESPACE
+          value: news-analyzer
+        - name: START
+          value: "2025-01-01"
+        - name: END
+          value: "2025-09-30"
+        - name: SPLIT
+          value: "weekly"
+        - name: FORCE
+          value: "1"
+        - name: MAX_NEW_PER_RUN
+          value: "5"
+        - name: PW_TRACE
+          value: "0"
+        - name: SCRAPER_PARALLELISM
+          value: "2"
+        - name: REQ_CPU
+          value: "2"
+        - name: REQ_MEM
+          value: "1Gi"
+        - name: LIM_CPU
+          value: "2"
+        - name: LIM_MEM
+          value: "3Gi"
+        command:
+        - /bin/bash
+        - -lc
+        - |
+          set -euo pipefail
+          ns=${NAMESPACE:-news-analyzer}
+          start=${START:-2025-01-01}
+          end=${END:-2025-09-30}
+          split=${SPLIT:-weekly}
+          pubs=${PUBLICATIONS:-"Smyth County News & Messenger,The News & Press,The Bland County Messenger,The Floyd Press,Wytheville Enterprise,Washington County News"}
+          force=${FORCE:-1}
+          max_new=${MAX_NEW_PER_RUN:-5}
+          req_cpu=${REQ_CPU:-2}
+          req_mem=${REQ_MEM:-1Gi}
+          lim_cpu=${LIM_CPU:-2}
+          lim_mem=${LIM_MEM:-3Gi}
+          pw_trace=${PW_TRACE:-0}
+          par=${SCRAPER_PARALLELISM:-2}
+
+          # auto-tune based on recent OOMKilled pods
+          oom=$(kubectl get pods -n "$ns" -l component=scraper,type=backfill -o json 2>/dev/null | grep -c OOMKilled || true)
+          succ=$(kubectl get jobs -n "$ns" -l component=scraper,type=backfill -o json 2>/dev/null | grep -c '"succeeded":1' || true)
+          if [ "$oom" -gt 0 ]; then
+            echo "Detected $oom OOMKilled pod(s); lowering parallelism and raising memory."
+            par=1
+            lim_mem=4Gi
+          elif [ "$succ" -gt 5 ]; then
+            # if system is healthy, allow more new jobs per run
+            max_new=${MAX_NEW_PER_RUN:-5}
+            [ "$max_new" -lt 8 ] && max_new=8
+          fi
+
+          # compute capacity (best-effort)
+          limit=$(kubectl get resourcequota news-analyzer-quota -n "$ns" -o jsonpath='{.status.hard.count/jobs\.batch}' 2>/dev/null || true)
+          [ -z "$limit" ] && limit=40
+          used=$(kubectl get jobs -n "$ns" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+          cap=$((limit - used))
+          [ $cap -lt 0 ] && cap=0
+          [ $cap -gt $max_new ] && cap=$max_new
+          created=0
+
+          # helper to format dates
+          d2() { date -d "$1" +%Y-%m-%d; }
+
+          cur="$start"
+          while [ "$cur" \<="$end" ]; do
+            if [ "$split" = "daily" ]; then
+              win_s="$cur"; win_e="$cur"
+            elif [ "$split" = "biweekly" ]; then
+              win_s="$cur"; win_e=$(date -d "$cur +13 days" +%Y-%m-%d); [ "$win_e" \> "$end" ] && win_e="$end"
+            else
+              win_s="$cur"; win_e=$(date -d "$cur +6 days" +%Y-%m-%d); [ "$win_e" \> "$end" ] && win_e="$end"
+            fi
+
+            # check Wed/Sat in window
+            keep=0
+            d="$win_s"
+            while [ "$d" \<="$win_e" ]; do
+              dow=$(date -d "$d" +%u)
+              if [ "$dow" = "3" ] || [ "$dow" = "6" ]; then keep=1; break; fi
+              d=$(date -d "$d +1 day" +%Y-%m-%d)
+            done
+            if [ $keep -eq 1 ] && [ $created -lt $cap ]; then
+              ws=$(date -d "$win_s" +%Y%m%d); we=$(date -d "$win_e" +%Y%m%d)
+              # skip if job for this window exists
+              if kubectl get jobs -n "$ns" -l component=scraper,type=backfill,win-start=$ws,win-end=$we -o name | grep -q .; then
+                : # exists
+              else
+                echo "Creating backfill for $win_s..$win_e"
+                cat <<YAML | kubectl create -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: scraper-backfill-
+  namespace: $ns
+  labels:
+    app: news-analyzer
+    component: scraper
+    type: backfill
+    win-start: "$ws"
+    win-end: "$we"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: news-analyzer
+        component: scraper
+        type: backfill
+        win-start: "$ws"
+        win-end: "$we"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: news-analyzer-ops-bot
+      imagePullSecrets:
+      - name: harbor-regcred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      volumes:
+      - name: session-storage
+        emptyDir: {}
+      - name: scraper-login-override
+        configMap:
+          name: scraper-login-override
+      - name: scraper-discover-override
+        configMap:
+          name: scraper-discover-override
+      containers:
+      - name: scraper
+        image: registry.harbor.lan/library/news-analyzer-scraper:latest
+        imagePullPolicy: Always
+        env:
+        - name: PW_TRACE
+          value: "$pw_trace"
+        - name: SCRAPER_PARALLELISM
+          value: "$par"
+        - name: HOME
+          value: /home/scraper
+        - name: PLAYWRIGHT_BROWSERS_PATH
+          value: /home/scraper/.cache/ms-playwright
+        - name: EEDITION_USER
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: EEDITION_USER
+        - name: EEDITION_PASS
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: EEDITION_PASS
+        - name: SMARTPROXY_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: SMARTPROXY_USERNAME
+        - name: SMARTPROXY_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: SMARTPROXY_PASSWORD
+        - name: SMARTPROXY_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: SMARTPROXY_HOST
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: MINIO_ENDPOINT
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: news-analyzer-secrets
+              key: MINIO_SECRET_KEY
+        - name: MINIO_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: MINIO_BUCKET
+        - name: SCRAPER_USER_AGENT
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: SCRAPER_USER_AGENT
+        - name: START_DATE
+          value: "$win_s"
+        - name: END_DATE
+          value: "$win_e"
+        - name: FORCE_DOWNLOAD
+          value: "$force"
+        - name: PUBLICATIONS
+          value: "$pubs"
+        resources:
+          requests:
+            memory: "$req_mem"
+            cpu: "$req_cpu"
+          limits:
+            memory: "$lim_mem"
+            cpu: "$lim_cpu"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          mkdir -p /app/storage
+          python - <<'PY' > /tmp/download-dates.txt
+          from datetime import datetime, timedelta
+          import os
+          start = datetime.strptime(os.environ['START_DATE'], '%Y-%m-%d').date()
+          end = datetime.strptime(os.environ['END_DATE'], '%Y-%m-%d').date()
+          cur = start
+          while cur <= end:
+              if cur.weekday() in (2, 5):
+                  print(cur.isoformat())
+              cur += timedelta(days=1)
+          PY
+          PUB_LIST="${PUBLICATIONS}"
+          while read d; do
+            [ -z "$d" ] && continue
+            echo "Processing edition $d"
+            extra=""; [ "$FORCE_DOWNLOAD" = "1" ] && extra="--force"
+            OLD_IFS="$IFS"; IFS=,; for pub in $PUB_LIST; do
+              pub_trim=$(echo "$pub" | sed -e "s/^ *//" -e "s/ *$//")
+              [ -z "$pub_trim" ] && continue
+              echo "  -> $pub_trim"
+              python -m scraper.downloader --date "$d" $extra --publication "$pub_trim" --storage /app/storage/storage_state.json
+              sleep 1
+            done; IFS="$OLD_IFS"
+          done < /tmp/download-dates.txt
+          volumeMounts:
+          - name: session-storage
+            mountPath: /app/storage
+          - name: scraper-login-override
+            mountPath: /app/scraper/login.py
+            subPath: login.py
+          - name: scraper-discover-override
+            mountPath: /app/scraper/discover.py
+            subPath: discover.py
+          YAML
+                created=$((created+1))
+              fi
+            fi
+            # advance window
+            if [ "$split" = "daily" ]; then
+              cur=$(date -d "$cur +1 day" +%Y-%m-%d)
+            elif [ "$split" = "biweekly" ]; then
+              cur=$(date -d "$win_e +1 day" +%Y-%m-%d)
+            else
+              cur=$(date -d "$win_e +1 day" +%Y-%m-%d)
+            fi
+          done
+          echo "Backfill top-up created $created jobs (cap $cap)."

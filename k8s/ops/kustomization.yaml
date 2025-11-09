@@ -6,4 +6,5 @@ resources:
   - ops-configmap.yaml
   - ops-health-cronjob.yaml
   - ops-cleanup-cronjob.yaml
+  - ops-backfill-topup-cronjob.yaml
   # ops-deployer-job.yaml is optional; apply on demand

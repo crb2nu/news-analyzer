@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: news-analyzer-ops-backfill-topup
+  namespace: news-analyzer
+  labels:
+    app: news-analyzer
+    component: ops-backfill
+spec:
+  # every 15 minutes
+  schedule: "*/15 * * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: news-analyzer
+            component: ops-backfill
+        spec:
+          serviceAccountName: news-analyzer-ops-bot
+          restartPolicy: Never
+          containers:
+          - name: topup
+            image: registry.harbor.lan/dockerhub-cache/library/python:3.11-slim
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: NAMESPACE
+              value: news-analyzer
+            - name: START
+              value: "2025-01-01"
+            - name: END
+              value: "2025-09-30"
+            - name: SPLIT
+              value: "weekly"
+            - name: FORCE
+              value: "1"
+            - name: PUBLICATIONS
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: PUBLICATIONS
+                  optional: true
+            - name: MAX_NEW_PER_RUN
+              value: "5"
+            - name: PW_TRACE
+              value: "0"
+            - name: SCRAPER_PARALLELISM
+              value: "2"
+            - name: REQ_CPU
+              value: "2"
+            - name: REQ_MEM
+              value: "1Gi"
+            - name: LIM_CPU
+              value: "2"
+            - name: LIM_MEM
+              value: "3Gi"
+            command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              pip install --no-cache-dir --quiet kubernetes
+              python /app/backfill_topup.py
+            volumeMounts:
+            - name: ops-scripts
+              mountPath: /app
+          volumes:
+          - name: ops-scripts
+            configMap:
+              name: news-analyzer-ops-scripts
