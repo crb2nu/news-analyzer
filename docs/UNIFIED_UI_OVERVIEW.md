@@ -48,9 +48,10 @@
 
 ## 6. Implementation Notes
 - Add `workspace` components (`FilterPanel`, `InsightsPanel`, `SearchPanel`, `StatCard`) under `src/lib/components/workspace` to keep layout-specific UI isolated.
-- Extend `TrendCard` with a `select` event so other views (discover, analytics) can opt-in to cross-filter behavior without refactors.
+- Extend `TrendCard` with a `select` event and optional relative progress bars so other views (discover, analytics) share the same visualization primitives.
 - Promote the new workspace to the default home route; legacy dedicated pages remain for deep dives but are reachable via nav.
-- Introduce a small utility (`computeArticleStats`) with unit tests to keep derived-metric logic deterministic and testable.
+- Introduce small utilities (`computeArticleStats`, `buildInsightLinks`) with unit tests to keep derived metrics and graph edges deterministic.
+- Network graph data now merges topics, entities, and tags with deterministic link generation for stable force layouts.
 
 ## 7. Acceptance Criteria
 - Home route renders the unified layout with all three pillars visible on desktop and stacked on mobile.

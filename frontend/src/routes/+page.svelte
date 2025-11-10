@@ -24,6 +24,7 @@
 	import Button from '$lib/components/common/Button.svelte';
 	import type { Article, TrendingKind } from '$lib/types/api';
 import { computeArticleStats } from '$lib/utils/articles';
+import { buildInsightLinks, type InsightNode, type InsightLink } from '$lib/utils/network';
 
 type FilterStat = {
 	label: string;
@@ -53,20 +54,8 @@ let focusedArticleId: number | null = null;
 let activeTrend: { kind: TrendingKind; key: string } | null = null;
 let lastTrendDate: string | null = null;
 let filterStats: FilterStat[] = [];
-
-function buildNetworkLinks(nodes: Array<{ id: string }>) {
-	const links: Array<{ source: string; target: string; value: number }> = [];
-	for (let i = 0; i < nodes.length - 1; i += 1) {
-		const targetIndex = (i + 1 + (i % 3)) % nodes.length;
-		if (targetIndex === i) continue;
-		links.push({
-			source: nodes[i].id,
-			target: nodes[targetIndex].id,
-			value: (i % 4) + 1
-		});
-	}
-	return links;
-}
+let networkNodes: InsightNode[] = [];
+let networkLinks: InsightLink[] = [];
 
 	const datesQuery = createQuery({
 		queryKey: ['feed', 'dates'],
@@ -199,18 +188,24 @@ function buildNetworkLinks(nodes: Array<{ id: string }>) {
 		...($trendingEntitiesQuery.data?.map((item) => ({
 			id: `entity-${item.key}`,
 			label: item.key,
-			type: 'entity',
+			type: 'entity' as const,
 			score: item.score
 		})) || []),
 		...($trendingTopicsQuery.data?.map((item) => ({
 			id: `topic-${item.key}`,
 			label: item.key,
-			type: 'topic',
+			type: 'topic' as const,
+			score: item.score
+		})) || []),
+		...($trendingTagsQuery.data?.map((item) => ({
+			id: `tag-${item.key}`,
+			label: item.key,
+			type: 'tag' as const,
 			score: item.score
 		})) || [])
 	];
 
-	$: networkLinks = buildNetworkLinks(networkNodes);
+	$: networkLinks = buildInsightLinks(networkNodes);
 
 	function handleDateChange(date: string) {
 		selectedDate = date;

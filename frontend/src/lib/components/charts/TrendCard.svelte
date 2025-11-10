@@ -13,7 +13,8 @@
 	export let score: number;
 	export let zscore: number | null = null;
 	export let details: any = null;
-	export let clickable: boolean = true;
+export let clickable: boolean = true;
+export let relativeMax: number | null = null;
 
 	const dispatch = createEventDispatcher<{ select: { kind: string; key: string } }>();
 
@@ -25,6 +26,8 @@
 
 	$: trendDirection = zscore !== null && zscore > 1 ? 'up' : zscore !== null && zscore < -1 ? 'down' : 'neutral';
 
+	$: scorePercent = relativeMax ? Math.min(100, Math.round((score / relativeMax) * 100)) : null;
+
 	function handleClick() {
 		if (!clickable) return;
 		dispatch('select', { kind, key: itemKey });
@@ -35,7 +38,7 @@
 	hoverable={clickable}
 	on:click={handleClick}
 >
-	<div class="flex items-start justify-between gap-3">
+		<div class="flex items-start justify-between gap-3">
 		<div class="flex-1 min-w-0">
 			<div class="flex items-center gap-2 mb-1">
 				<h3 class="font-semibold text-sm truncate">{itemKey}</h3>
@@ -72,6 +75,18 @@
 				<p class="text-xs text-slate-600 dark:text-slate-400 mt-2 line-clamp-2">
 					{details.description}
 				</p>
+			{/if}
+
+			{#if scorePercent !== null}
+				<div class="mt-3 h-1.5 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+					<div
+						class="h-full rounded-full"
+						class:bg-green-400={trendDirection === 'up'}
+						class:bg-blue-400={trendDirection === 'down'}
+						class:bg-slate-400={trendDirection === 'neutral'}
+						style={`width: ${scorePercent}%;`}
+					></div>
+				</div>
 			{/if}
 		</div>
 
