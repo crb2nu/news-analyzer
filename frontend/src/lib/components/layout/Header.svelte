@@ -3,7 +3,7 @@
 	import ThemeToggle from './ThemeToggle.svelte';
 
 	const navItems = [
-		{ href: '/', label: 'Feed', icon: '📰' },
+		{ href: '/', label: 'Workspace', icon: '⚡️' },
 		{ href: '/browse', label: 'Browse', icon: '🧭' },
 		{ href: '/events', label: 'Events', icon: '📅' },
 		{ href: '/discover', label: 'Discover', icon: '🔍' },

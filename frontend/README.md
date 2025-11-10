@@ -35,12 +35,13 @@ npm run preview
 
 ## Features
 
+- ⚡ **Insights Workspace** - Unified browsing, analytics, and discovery experience on the home route
 - 📰 **Feed View** - Browse daily articles with filtering and search
 - 🔍 **Discover** - Global search across all articles with trending insights
 - 📅 **Events** - Community events calendar extracted from articles
 - 🌓 **Dark Mode** - Automatic theme switching with manual override
 - ♿ **Accessible** - WCAG 2.1 AA compliant with keyboard navigation
-- ⚡ **Fast** - Static site generation with smart caching
+- 🚀 **Fast** - Static site generation with smart caching
 
 ## Development
 

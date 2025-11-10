@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createEventDispatcher } from 'svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { getTimeline } from '$lib/api/endpoints';
 	import Card from '../common/Card.svelte';
@@ -14,6 +15,8 @@
 	export let details: any = null;
 	export let clickable: boolean = true;
 
+	const dispatch = createEventDispatcher<{ select: { kind: string; key: string } }>();
+
 	$: timelineQuery = createQuery({
 		queryKey: ['timeline', kind, itemKey],
 		queryFn: () => getTimeline(kind, itemKey, 14),
@@ -23,10 +26,8 @@
 	$: trendDirection = zscore !== null && zscore > 1 ? 'up' : zscore !== null && zscore < -1 ? 'down' : 'neutral';
 
 	function handleClick() {
-		if (clickable) {
-			// Could navigate to detailed view or filter by this item
-			console.log('Clicked:', kind, itemKey);
-		}
+		if (!clickable) return;
+		dispatch('select', { kind, key: itemKey });
 	}
 </script>
 
