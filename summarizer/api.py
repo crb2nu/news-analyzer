@@ -201,21 +201,11 @@ Provide a JSON response with the following structure:
             
             logger.info(f"Summarizing article: {article.title[:50]}... (estimated {estimated_tokens} tokens)")
             
-            # Call OpenAI API
-            response = await self.client.chat.completions.create(
-                model=self.settings.openai_model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=int(self.settings.openai_max_tokens),
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse response
-            result_text = response.choices[0].message.content or ""
-            tokens_used = response.usage.total_tokens
+            # Call LLM via LiteLLM with JSON-mode fallback
+            result_text, tokens_used = await self._chat_json_with_fallback([
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt}
+            ])
 
             result_data, used_fallback = extract_json_object(result_text)
             if used_fallback:
@@ -242,6 +232,21 @@ Provide a JSON response with the following structure:
         except Exception as e:
             logger.error(f"Failed to summarize article: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Summarization failed: {str(e)}")
+
+    async def _chat_json_with_fallback(self, messages: List[Dict[str, Any]]) -> tuple[str, int]:
+        # Local import with compatibility for both package and module execution
+        try:
+            from .utils import chat_with_json_fallback  # type: ignore
+        except Exception:
+            from utils import chat_with_json_fallback  # type: ignore
+        content, tokens = await chat_with_json_fallback(
+            self.client,
+            self.settings.openai_model,
+            messages,
+            int(self.settings.openai_max_tokens),
+            0.3,
+        )
+        return content, tokens
     
     async def process_batch_summaries(self, article_ids: List[int], force_refresh: bool = False) -> BatchSummaryResponse:
         """

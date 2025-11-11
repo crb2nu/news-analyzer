@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
@@ -59,6 +59,43 @@ def extract_json_object(raw: str) -> Tuple[Dict[str, Any], bool]:
         "topics": [],
         "confidence_score": 0.6,
     }, True
+
+
+async def chat_with_json_fallback(
+    client: Any,
+    model: str,
+    messages: List[Dict[str, Any]],
+    max_tokens: int,
+    temperature: float = 0.3,
+) -> Tuple[str, int]:
+    """Attempt a JSON-mode chat call, then fall back to text mode.
+
+    Some backends behind LiteLLM (e.g., certain vLLM models) do not support
+    OpenAI's `response_format={"type":"json_object"}`. This helper first tries
+    JSON mode and on error falls back to a regular chat completion.
+
+    Returns a tuple of (content, total_tokens).
+    """
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+    except Exception:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    content = getattr(resp.choices[0].message, "content", "") or ""
+    usage = getattr(resp, "usage", None)
+    total_tokens = getattr(usage, "total_tokens", 0) if usage else 0
+    return content, int(total_tokens or 0)
 
 
 def derive_fallback_title(

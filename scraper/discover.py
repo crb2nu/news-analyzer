@@ -10,6 +10,8 @@ from playwright.sync_api import (
     Page,
 )
 from .config import Settings
+import subprocess
+import sys
 from .login import verify_session, login
 from .browser_manager import BrowserManager, storage_state_path
 from .observability import Metrics, TraceHelper, proxy_label_from_settings
@@ -76,13 +78,37 @@ class EditionDiscoverer:
         """
         if self._authed:
             return True
-        if verify_session(self.storage_path):
-            self._authed = True
-            return True
+        # Run verification in a separate process to avoid issues with
+        # Playwright sync API inside an active asyncio loop in the caller.
+        try:
+            rc = subprocess.run(
+                [sys.executable, "-m", "scraper.login", "--verify", "--storage", str(self.storage_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            ).returncode
+            if rc == 0:
+                self._authed = True
+                return True
+        except Exception:
+            # Fall through to in-process attempt
+            pass
         logger.info("Session invalid, attempting login...")
-        ok = login(self.storage_path)
-        self._authed = bool(ok)
-        return ok
+        # Prefer a separate process for login as well to isolate Playwright.
+        try:
+            rc = subprocess.run(
+                [sys.executable, "-m", "scraper.login", "--storage", str(self.storage_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            ).returncode
+            self._authed = (rc == 0)
+            return self._authed
+        except Exception:
+            # Final fallback: in-process login
+            ok = login(self.storage_path)
+            self._authed = bool(ok)
+            return ok
     
     def get_available_publications(self) -> List[str]:
         return PUBLICATION_TABS.copy()

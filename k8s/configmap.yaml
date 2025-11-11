@@ -33,9 +33,9 @@ data:
   NWS_BBOX: "-82.8,36.5,-80.0,37.8"
   
   # OpenAI configuration
-  # Route all chat completions through LiteLLM's active model alias.
-  # Change the alias in LiteLLM to switch models without redeploying.
-  OPENAI_MODEL: "active"
+  # Use the currently-available LiteLLM model in the cluster.
+  # If you later add a LiteLLM alias (e.g., "active"), update this key accordingly.
+  OPENAI_MODEL: "qwen2.5-14b-gptq"
   OPENAI_MAX_TOKENS: "1000"
   
   # Vector DB (Weaviate in k3s)

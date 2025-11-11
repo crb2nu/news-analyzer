@@ -152,19 +152,23 @@ Provide a JSON response with the following structure:
 }}"""
 
             # Make API call
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # Call LLM via LiteLLM with JSON-mode fallback
+            try:
+                from summarizer.utils import chat_with_json_fallback
+            except Exception:
+                from utils import chat_with_json_fallback
+            content, _ = await chat_with_json_fallback(
+                self.client,
+                self.model,
+                [
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.3,
-                max_tokens=self.max_tokens
+                self.max_tokens,
+                0.3,
             )
-            
+
             # Parse response
-            content = response.choices[0].message.content or ""
             result_data, used_fallback = extract_json_object(content)
             if used_fallback:
                 logger.warning("Using fallback parser for article %s", article.id)
