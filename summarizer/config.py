@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     # OpenAI configuration
     openai_api_key: str = ""
     openai_api_base: str = ""
-    # Prefer LiteLLM's active route alias by default so model switches
-    # can be handled centrally in the LiteLLM deployment without code changes.
-    openai_model: str = "active"
+    # Default to the quantized qwen2.5 route that is deployed in LiteLLM.
+    # This keeps local/dev settings in sync with the k8s ConfigMap.
+    openai_model: str = "qwen2.5-14b-gptq"
     openai_max_tokens: str = "1000"
     
     # Ntfy configuration (replacing email)

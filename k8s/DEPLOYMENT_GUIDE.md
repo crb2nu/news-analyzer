@@ -168,9 +168,9 @@ schedule: "0 11 * * *"  # 7:00 AM EST daily
 ```
 
 ### OpenAI/LiteLLM Model
-Use the LiteLLM route alias in `k8s/configmap.yaml` so you can switch backends centrally:
+Use the deployed LiteLLM route for the quantized Qwen model in `k8s/configmap.yaml`:
 ```yaml
-OPENAI_MODEL: "active"  # LiteLLM alias; retarget in LiteLLM config
+OPENAI_MODEL: "qwen2.5-14b-gptq"  # matches the route configured in LiteLLM
 ```
 
 ### Storage Retention
