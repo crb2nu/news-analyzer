@@ -70,7 +70,7 @@ spec:
               name: news-analyzer-secrets
               key: OPENAI_API_KEY
         - name: OPENAI_API_BASE
-          value: "http://vllm-qwen-awq-lb.ai.svc.cluster.local:8000/v1"
+          value: "http://litellm.ai.svc.cluster.local:8000/v1"
         - name: OPENAI_MODEL
           valueFrom:
             configMapKeyRef:
@@ -246,7 +246,7 @@ spec:
                   name: news-analyzer-secrets
                   key: OPENAI_API_KEY
             - name: OPENAI_API_BASE
-              value: "http://vllm-qwen-awq-lb.ai.svc.cluster.local:8000/v1"
+              value: "http://litellm.ai.svc.cluster.local:8000/v1"
             - name: OPENAI_MODEL
               valueFrom:
                 configMapKeyRef:

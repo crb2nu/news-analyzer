@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     # OpenAI configuration
     openai_api_key: str = ""
     openai_api_base: str = ""
-    openai_model: str = "gpt-4o-mini"
+    # Prefer LiteLLM's active route alias by default so model switches
+    # can be handled centrally in the LiteLLM deployment without code changes.
+    openai_model: str = "active"
     openai_max_tokens: str = "1000"
     
     # Ntfy configuration (replacing email)

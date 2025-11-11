@@ -4,6 +4,7 @@
 	import StatCard from './StatCard.svelte';
 	import Input from '../common/Input.svelte';
 	import Button from '../common/Button.svelte';
+	import Select from '../common/Select.svelte';
 
 	export let dates: FeedDate[] = [];
 	export let selectedDate = '';
@@ -12,7 +13,12 @@
 	export let searchText = '';
 	export let eventsOnly = false;
 	export let hideRead = false;
-	export let stats: Array<{ label: string; value: string | number; helper?: string; accent?: 'blue' | 'green' | 'purple' | 'orange' }> = [];
+	export let stats: Array<{
+		label: string;
+		value: string | number;
+		helper?: string;
+		accent?: 'blue' | 'green' | 'purple' | 'orange';
+	}> = [];
 
 	const dispatch = createEventDispatcher({
 		dateChange: (value: string) => value,
@@ -61,7 +67,7 @@
 				</button>
 			{/if}
 		</div>
-		<div class="flex flex-wrap gap-2">
+		<div class="hidden sm:flex flex-wrap gap-2">
 			{#each sections as section}
 				<button
 					type="button"
@@ -80,6 +86,43 @@
 					<span class="ml-1 text-[10px] opacity-70">{section.count}</span>
 				</button>
 			{/each}
+		</div>
+		<div class="sm:hidden -mx-1" role="region" aria-label="Quick section filter">
+			<div class="flex gap-2 overflow-x-auto no-scrollbar px-1 py-1 snap-x snap-mandatory">
+				{#each sections as section}
+					<button
+						type="button"
+						class="text-xs px-3 py-1 rounded-full border whitespace-nowrap snap-start transition-colors"
+						class:bg-blue-600={selectedSection === section.name}
+						class:text-white={selectedSection === section.name}
+						class:border-blue-600={selectedSection === section.name}
+						class:bg-slate-100={selectedSection !== section.name}
+						class:text-slate-700={selectedSection !== section.name}
+						class:dark:bg-slate-800={selectedSection !== section.name}
+						class:dark:text-slate-200={selectedSection !== section.name}
+						class:dark:border-slate-700={selectedSection !== section.name}
+						on:click={() => handleSectionToggle(section.name)}
+						aria-pressed={selectedSection === section.name}
+					>
+						{section.name}
+						<span class="ml-1 text-[10px] opacity-70">{section.count}</span>
+					</button>
+				{/each}
+			</div>
+			<div class="pt-2">
+				<label for="mobile-section-select" class="sr-only">Select section</label>
+				<Select
+					id="mobile-section-select"
+					class="text-sm"
+					value={selectedSection}
+					on:change={(e) => dispatch('sectionChange', (e.target as HTMLSelectElement).value)}
+				>
+					<option value="">All sections</option>
+					{#each sections as section}
+						<option value={section.name}>{section.name} ({section.count})</option>
+					{/each}
+				</Select>
+			</div>
 		</div>
 	</div>
 
@@ -127,7 +170,5 @@
 		</div>
 	{/if}
 
-	<Button variant="secondary" on:click={() => dispatch('refresh')} class="w-full">
-		Refresh
-	</Button>
+	<Button variant="secondary" on:click={() => dispatch('refresh')} class="w-full">Refresh</Button>
 </section>

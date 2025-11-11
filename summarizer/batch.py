@@ -78,6 +78,9 @@ class ArticleSummarizer:
         client_kwargs = {"api_key": settings.openai_api_key}
         if settings.openai_api_base:
             client_kwargs["base_url"] = settings.openai_api_base.rstrip("/")
+        # Add X-API-KEY for LiteLLM compatibility (alongside Authorization)
+        if settings.openai_api_key:
+            client_kwargs["default_headers"] = {"X-API-KEY": settings.openai_api_key}
         
         self.client = AsyncOpenAI(**client_kwargs)
         self.model = settings.openai_model

@@ -57,8 +57,9 @@ The following components are experiencing ImagePullBackOff errors due to missing
 ## Key Configuration Updates
 
 ### LiteLLM Integration
-- The summarizer has been configured to use LiteLLM instead of direct OpenAI API calls
-- Environment variable `OPENAI_API_BASE` set to: `http://litellm.litellm.svc.cluster.local:4000`
+- The summarizer is configured to use LiteLLM instead of direct model backends
+- Environment variable `OPENAI_API_BASE` set to: `http://litellm.ai.svc.cluster.local:8000/v1`
+- Environment variable `OPENAI_MODEL` set to: `active` (LiteLLM route alias)
 - The existing `OPENAI_API_KEY` will be used for LiteLLM authentication
 
 ### Ntfy Integration
@@ -92,9 +93,9 @@ To complete the deployment, you need to:
    ```
 
 2. **Verify LiteLLM Service**
-   - Ensure LiteLLM is deployed in the `litellm` namespace
-   - Verify it's accessible at `http://litellm.litellm.svc.cluster.local:4000`
-   - Confirm it has the `gpt-4o-mini` model available
+   - Ensure LiteLLM is deployed in the `litellm` or `ai` namespace
+   - Verify it's accessible at `http://litellm.ai.svc.cluster.local:8000/v1`
+   - Confirm/update the `active` model alias to point to your desired backend model
 
 3. **Monitor Initial Runs**
    - The extractor CronJob runs every 15 minutes

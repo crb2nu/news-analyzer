@@ -11,6 +11,7 @@ export function updateUrlParams(params: Record<string, string | undefined>) {
 		}
 	});
 
-	const newUrl = url.searchParams.toString() ? `?${url.searchParams.toString()}` : url.pathname;
+	const search = url.searchParams.toString();
+	const newUrl = `${url.pathname}${search ? `?${search}` : ''}${url.hash}`;
 	goto(newUrl, { replaceState: true, noScroll: true, keepFocus: true });
 }

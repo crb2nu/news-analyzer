@@ -167,10 +167,10 @@ Edit the cron schedule in `k8s/notifier-deployment.yaml`:
 schedule: "0 11 * * *"  # 7:00 AM EST daily
 ```
 
-### OpenAI Model
-Change the model in `k8s/configmap.yaml`:
+### OpenAI/LiteLLM Model
+Use the LiteLLM route alias in `k8s/configmap.yaml` so you can switch backends centrally:
 ```yaml
-OPENAI_MODEL: "gpt-4o-mini"  # or "gpt-3.5-turbo" for cheaper
+OPENAI_MODEL: "active"  # LiteLLM alias; retarget in LiteLLM config
 ```
 
 ### Storage Retention

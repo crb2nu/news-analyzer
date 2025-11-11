@@ -33,7 +33,9 @@ data:
   NWS_BBOX: "-82.8,36.5,-80.0,37.8"
   
   # OpenAI configuration
-  OPENAI_MODEL: "qwen3-14b-awq"
+  # Route all chat completions through LiteLLM's active model alias.
+  # Change the alias in LiteLLM to switch models without redeploying.
+  OPENAI_MODEL: "active"
   OPENAI_MAX_TOKENS: "1000"
   
   # Vector DB (Weaviate in k3s)
