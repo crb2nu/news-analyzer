@@ -167,6 +167,15 @@ spec:
           limits:
             memory: "$lim_mem"
             cpu: "$lim_cpu"
+        volumeMounts:
+        - name: session-storage
+          mountPath: /app/storage
+        - name: scraper-login-override
+          mountPath: /app/scraper/login.py
+          subPath: login.py
+        - name: scraper-discover-override
+          mountPath: /app/scraper/discover.py
+          subPath: discover.py
         command:
         - /bin/sh
         - -c
@@ -197,15 +206,6 @@ spec:
               sleep 1
             done; IFS="\$OLD_IFS"
           done < /tmp/download-dates.txt
-          volumeMounts:
-          - name: session-storage
-            mountPath: /app/storage
-          - name: scraper-login-override
-            mountPath: /app/scraper/login.py
-            subPath: login.py
-          - name: scraper-discover-override
-            mountPath: /app/scraper/discover.py
-            subPath: discover.py
 EOF
         created=$((created+1))
       fi

@@ -1,4 +1,4 @@
-.PHONY: extractor-run summarizer-run extractor-logs summarizer-logs backfill scrape-range test-health-access oauth-start-access oauth-status-access
+.PHONY: extractor-run summarizer-run extractor-logs summarizer-logs backfill scrape-range test-health-access oauth-start-access oauth-status-access summarizer-redeploy cleanup-jobs
 .PHONY: scrape-range-split topup-backfill
 .PHONY: scrape-range-split
 
@@ -35,6 +35,31 @@ summarizer-logs:
 		echo "JOB=<name> is required" >&2; exit 1; \
 	fi
 	@kubectl logs -f job/$(JOB) -n news-analyzer
+
+# Re-apply the shared ConfigMap and redeploy the summarizer API/static UI
+summarizer-redeploy:
+	@set -e; \
+	echo "Updating ConfigMap..."; \
+	kubectl apply -f k8s/configmap.yaml; \
+	echo "Updating summarizer deployment + service..."; \
+	kubectl apply -f k8s/summarizer-deployment.yaml; \
+	echo "Refreshing ingress (if present)..."; \
+	kubectl apply -f k8s/summarizer-ingress.yaml; \
+	echo "Waiting for rollout to finish..."; \
+	kubectl rollout status deployment/news-analyzer-summarizer -n news-analyzer
+
+# Delete completed Jobs to stay under namespace quotas. Override SELECTOR to narrow.
+SELECTOR ?= app=news-analyzer
+cleanup-jobs:
+	@set -e; \
+	jobs=$$(kubectl get jobs -n news-analyzer -l $(SELECTOR) --field-selector status.successful=1 -o name 2>/dev/null || true); \
+	if [ -z "$$jobs" ]; then \
+	  echo "No completed jobs matching selector: $(SELECTOR)"; \
+	else \
+	  echo "Deleting jobs:"; \
+	  echo "$$jobs" | tr ' ' '\n'; \
+	  kubectl delete -n news-analyzer $$jobs; \
+	fi
 
 # Backfill cached editions: make backfill START=YYYY-MM-DD END=YYYY-MM-DD [FORCE=1]
 backfill:
@@ -264,6 +289,15 @@ scrape-range:
   "          limits:" \
   "            memory: \"3Gi\"" \
   "            cpu: \"2\"" \
+	  "        volumeMounts:" \
+	  "        - name: session-storage" \
+	  "          mountPath: /app/storage" \
+	  "        - name: scraper-login-override" \
+	  "          mountPath: /app/scraper/login.py" \
+	  "          subPath: login.py" \
+	  "        - name: scraper-discover-override" \
+	  "          mountPath: /app/scraper/discover.py" \
+	  "          subPath: discover.py" \
 	  "        command:" \
 	  "        - /bin/sh" \
 	  "        - -c" \
@@ -301,19 +335,10 @@ scrape-range:
   '            done' \
 	  '            IFS="$$OLD_IFS"' \
 	  "          done < /tmp/download-dates.txt" \
-	  "        volumeMounts:" \
-	  "        - name: session-storage" \
-	  "          mountPath: /app/storage" \
-	  "        - name: scraper-login-override" \
-	  "          mountPath: /app/scraper/login.py" \
-	  "          subPath: login.py" \
-	  "        - name: scraper-discover-override" \
-	  "          mountPath: /app/scraper/discover.py" \
-	  "          subPath: discover.py" \
 	  "  backoffLimit: 0" \
 	  "  ttlSecondsAfterFinished: 86400" \
 	| kubectl apply -f -; \
-echo "Scraper job $$job created. Tail logs with: kubectl logs -f job/$$job -n news-analyzer"
+	echo "Scraper job $$job created. Tail logs with: kubectl logs -f job/$$job -n news-analyzer"
 
 # Split the scrape into multiple jobs across the range.
 # Usage: make scrape-range-split START=YYYY-MM-DD END=YYYY-MM-DD [SPLIT=weekly|daily|biweekly] [FORCE=1]
@@ -444,6 +469,15 @@ scrape-range-split:
 	    "          limits:" \
 	    "            memory: \"3Gi\"" \
 	    "            cpu: \"2\"" \
+	    "        volumeMounts:" \
+	    "        - name: session-storage" \
+	    "          mountPath: /app/storage" \
+	    "        - name: scraper-login-override" \
+	    "          mountPath: /app/scraper/login.py" \
+	    "          subPath: login.py" \
+	    "        - name: scraper-discover-override" \
+	    "          mountPath: /app/scraper/discover.py" \
+	    "          subPath: discover.py" \
 	    "        command:" \
 	    "        - /bin/sh" \
 	    "        - -c" \
@@ -480,15 +514,6 @@ scrape-range-split:
 	    '            done' \
 	    '            IFS="$$OLD_IFS"' \
 	    "          done < /tmp/download-dates.txt" \
-	    "        volumeMounts:" \
-	    "        - name: session-storage" \
-	    "          mountPath: /app/storage" \
-	    "        - name: scraper-login-override" \
-	    "          mountPath: /app/scraper/login.py" \
-	    "          subPath: login.py" \
-	    "        - name: scraper-discover-override" \
-	    "          mountPath: /app/scraper/discover.py" \
-	    "          subPath: discover.py" \
 	    "  backoffLimit: 0" \
 	    "  ttlSecondsAfterFinished: 172800" \
 	  | kubectl apply -f -; \
