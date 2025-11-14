@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     openai_api_base: str = ""
     # Default to the news-analyzer alias so deployments/workers match.
     openai_model: str = "news-analyzer"
-    openai_max_tokens: str = "1000"
+    openai_max_tokens: str = "512"
     
     # Ntfy configuration (replacing email)
     ntfy_url: str = "http://ntfy-service.news-analyzer.svc.cluster.local"

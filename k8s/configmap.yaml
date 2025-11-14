@@ -33,10 +33,9 @@ data:
   NWS_BBOX: "-82.8,36.5,-80.0,37.8"
   
   # OpenAI configuration
-  # Use the currently-available LiteLLM model in the cluster.
-  # If you later add a LiteLLM alias (e.g., "active"), update this key accordingly.
-  OPENAI_MODEL: "qwen2.5-14b-gptq"
-  OPENAI_MAX_TOKENS: "1000"
+  # Point at the central alias so clusters/environments stay in sync.
+  OPENAI_MODEL: "news-analyzer"
+  OPENAI_MAX_TOKENS: "512"
   
   # Vector DB (Weaviate in k3s)
   WEAVIATE_URL: "http://weaviate.ai.svc.cluster.local:8080"

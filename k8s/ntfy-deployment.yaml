@@ -103,6 +103,8 @@ spec:
         app: news-analyzer
         component: ntfy
     spec:
+      nodeSelector:
+        node.flexstack.io/class: services
       containers:
       - name: ntfy
         image: binwiederhier/ntfy:v2.11.0
