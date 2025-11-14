@@ -18,9 +18,8 @@ class Settings(BaseSettings):
     # OpenAI configuration
     openai_api_key: str = ""
     openai_api_base: str = ""
-    # Default to the quantized qwen2.5 route that is deployed in LiteLLM.
-    # This keeps local/dev settings in sync with the k8s ConfigMap.
-    openai_model: str = "qwen2.5-14b-gptq"
+    # Default to the news-analyzer alias so deployments/workers match.
+    openai_model: str = "news-analyzer"
     openai_max_tokens: str = "1000"
     
     # Ntfy configuration (replacing email)
