@@ -33,8 +33,8 @@ data:
   NWS_BBOX: "-82.8,36.5,-80.0,37.8"
   
   # OpenAI configuration
-  # Point at the central alias so clusters/environments stay in sync.
-  OPENAI_MODEL: "news-analyzer"
+  # Point at a working LiteLLM alias until the news-analyzer alias exists.
+  OPENAI_MODEL: "news-summarizer"
   OPENAI_MAX_TOKENS: "512"
   OPENAI_MODEL_FALLBACKS: "news-summarizer,qwen2.5-14b-gptq"
   
