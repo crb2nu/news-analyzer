@@ -1,9 +1,52 @@
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Sequence, Tuple, List
 
 THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+class ModelFailover:
+    """Track preferred/fallback model ordering with sticky success."""
+
+    def __init__(self, primary: str, fallbacks: Sequence[str] | None = None) -> None:
+        candidates: List[str] = []
+        for name in [primary, *(fallbacks or [])]:
+            if name and name not in candidates:
+                candidates.append(name)
+        if not candidates:
+            raise ValueError("At least one model must be provided")
+        self._candidates = candidates
+        self._primary = candidates[0]
+        self._active: Optional[str] = None
+
+    @property
+    def candidates(self) -> List[str]:
+        return list(self._candidates)
+
+    @property
+    def current(self) -> str:
+        return self._active or self._primary
+
+    def iteration_order(self) -> List[str]:
+        if self._active and self._active in self._candidates:
+            ordered = [self._active] + [m for m in self._candidates if m != self._active]
+            return ordered
+        return list(self._candidates)
+
+    def record_success(self, model: str) -> None:
+        if model in self._candidates:
+            self._active = model
+
+    def mark_unavailable(self, model: str) -> None:
+        if model == self._active:
+            self._active = None
+
+
+def is_invalid_model_error(exc: Exception) -> bool:
+    """Detect LiteLLM invalid-model errors regardless of structure."""
+    message = getattr(exc, "message", "") or str(exc)
+    return "invalid model name" in message.lower()
 
 
 def sanitize_response_text(raw: str) -> str:

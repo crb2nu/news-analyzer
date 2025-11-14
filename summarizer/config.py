@@ -1,3 +1,4 @@
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 from typing import List
 import random
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     # Default to the news-analyzer alias so deployments/workers match.
     openai_model: str = "news-analyzer"
     openai_max_tokens: str = "512"
+    openai_model_fallbacks: List[str] = Field(default_factory=list)
     
     # Ntfy configuration (replacing email)
     ntfy_url: str = "http://ntfy-service.news-analyzer.svc.cluster.local"
@@ -52,6 +54,16 @@ class Settings(BaseSettings):
         env_file = '.env'
         env_file_encoding = 'utf-8'
         extra = 'ignore'
+
+    @field_validator('openai_model_fallbacks', mode='before')
+    @classmethod
+    def _split_fallbacks(cls, value):
+        if isinstance(value, str):
+            parts = [item.strip() for item in value.split(',')]
+            return [item for item in parts if item]
+        if value is None:
+            return []
+        return value
     
     def get_random_proxy(self) -> dict:
         """Get a random proxy configuration for requests"""

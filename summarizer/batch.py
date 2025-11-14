@@ -27,11 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     from summarizer.database import DatabaseManager, StoredArticle
     from summarizer.config import Settings
-    from summarizer.utils import extract_json_object
+    from summarizer.utils import extract_json_object, ModelFailover, is_invalid_model_error
 except Exception:
     from database import DatabaseManager, StoredArticle
     from config import Settings
-    from utils import extract_json_object
+    from utils import extract_json_object, ModelFailover, is_invalid_model_error
 
 # Configure logging
 logging.basicConfig(
@@ -83,7 +83,10 @@ class ArticleSummarizer:
             client_kwargs["default_headers"] = {"X-API-KEY": settings.openai_api_key}
         
         self.client = AsyncOpenAI(**client_kwargs)
-        self.model = settings.openai_model
+        self.model_failover = ModelFailover(
+            settings.openai_model,
+            settings.openai_model_fallbacks,
+        )
         self.max_tokens = int(settings.openai_max_tokens)
         
         # System prompt for local news summarization + taxonomy extraction
@@ -100,7 +103,10 @@ Instructions:
 
 Return only valid JSON matching the provided schema."""
         
-        logger.info(f"Initialized ArticleSummarizer with model: {self.model}")
+        logger.info(
+            "Initialized ArticleSummarizer with model priority: %s",
+            ", ".join(self.model_failover.candidates),
+        )
     
     def _truncate_content(self, content: str, max_chars: int = 6000) -> str:
         """Truncate content to manage token limits."""
@@ -151,22 +157,47 @@ Provide a JSON response with the following structure:
     "confidence_score": 0.95
 }}"""
 
-            # Make API call
-            # Call LLM via LiteLLM with JSON-mode fallback
+            # Make API call with alias-aware failover
             try:
                 from summarizer.utils import chat_with_json_fallback
             except Exception:
                 from utils import chat_with_json_fallback
-            content, _ = await chat_with_json_fallback(
-                self.client,
-                self.model,
-                [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                self.max_tokens,
-                0.3,
-            )
+
+            content = ""
+            tokens_used = 0
+            last_invalid_exc: Exception | None = None
+            for model_name in self.model_failover.iteration_order():
+                try:
+                    content, tokens_used = await chat_with_json_fallback(
+                        self.client,
+                        model_name,
+                        [
+                            {"role": "system", "content": self.system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        self.max_tokens,
+                        0.3,
+                    )
+                    if self.model_failover.current != model_name:
+                        logger.info("ArticleSummarizer switched to model %s", model_name)
+                    self.model_failover.record_success(model_name)
+                    break
+                except Exception as exc:
+                    if not is_invalid_model_error(exc):
+                        raise
+                    last_invalid_exc = exc
+                    logger.warning(
+                        "Model %s is not available via LiteLLM (%s); trying fallback",
+                        model_name,
+                        exc,
+                    )
+                    self.model_failover.mark_unavailable(model_name)
+                    continue
+            else:
+                logger.error("All configured models rejected article %s", article.id)
+                if last_invalid_exc:
+                    logger.error("Last invalid-model error: %s", last_invalid_exc)
+                return None
 
             # Parse response
             result_data, used_fallback = extract_json_object(content)
@@ -196,6 +227,10 @@ Provide a JSON response with the following structure:
         except Exception as e:
             logger.error(f"Error summarizing article {article.id}: {str(e)}")
             return None
+
+    @property
+    def current_model(self) -> str:
+        return self.model_failover.current
 
 
 class BatchProcessor:
@@ -248,7 +283,7 @@ class BatchProcessor:
                     confidence_score=summary_response.confidence_score,
                     tokens_used=0,  # Would need token counting implementation
                     processing_time_ms=processing_time_ms,
-                    model_used=self.summarizer.model
+                    model_used=self.summarizer.current_model
                 )
                 # Upsert taxonomy data
                 if summary_response.tags:

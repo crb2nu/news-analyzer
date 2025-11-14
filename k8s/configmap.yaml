@@ -36,6 +36,7 @@ data:
   # Point at the central alias so clusters/environments stay in sync.
   OPENAI_MODEL: "news-analyzer"
   OPENAI_MAX_TOKENS: "512"
+  OPENAI_MODEL_FALLBACKS: "news-summarizer,qwen2.5-14b-gptq"
   
   # Vector DB (Weaviate in k3s)
   WEAVIATE_URL: "http://weaviate.ai.svc.cluster.local:8080"

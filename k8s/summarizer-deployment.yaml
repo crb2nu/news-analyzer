@@ -81,6 +81,12 @@ spec:
             configMapKeyRef:
               name: news-analyzer-config
               key: OPENAI_MAX_TOKENS
+        - name: OPENAI_MODEL_FALLBACKS
+          valueFrom:
+            configMapKeyRef:
+              name: news-analyzer-config
+              key: OPENAI_MODEL_FALLBACKS
+              optional: true
         - name: OPENAI_EMBED_BASE
           value: "http://litellm.ai.svc.cluster.local:8000/v1"
         - name: OPENAI_EMBED_MODEL
@@ -257,6 +263,12 @@ spec:
                 configMapKeyRef:
                   name: news-analyzer-config
                   key: OPENAI_MAX_TOKENS
+            - name: OPENAI_MODEL_FALLBACKS
+              valueFrom:
+                configMapKeyRef:
+                  name: news-analyzer-config
+                  key: OPENAI_MODEL_FALLBACKS
+                  optional: true
             - name: LOG_LEVEL
               valueFrom:
                 configMapKeyRef:

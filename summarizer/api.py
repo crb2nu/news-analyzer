@@ -31,12 +31,12 @@ try:
     # When running as a package (e.g., python -m summarizer.api)
     from .database import DatabaseManager, StoredArticle
     from .config import Settings
-    from .utils import extract_json_object
+    from .utils import extract_json_object, ModelFailover, is_invalid_model_error
 except Exception:
     # When running as a module from the folder (e.g., python -m api)
     from database import DatabaseManager, StoredArticle
     from config import Settings
-    from utils import extract_json_object
+    from utils import extract_json_object, ModelFailover, is_invalid_model_error
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,14 @@ class SummarizationService:
         if settings.openai_api_key:
             client_kwargs["default_headers"] = {"X-API-KEY": settings.openai_api_key}
         self.client = AsyncOpenAI(**client_kwargs)
+        self.model_failover = ModelFailover(
+            settings.openai_model,
+            settings.openai_model_fallbacks,
+        )
+        logger.info(
+            "SummarizationService model priority: %s",
+            ", ".join(self.model_failover.candidates),
+        )
         self.db_manager = DatabaseManager(settings.database_url)
         self.minio_bucket = settings.minio_bucket
         self.minio_client = None
@@ -239,14 +247,35 @@ Provide a JSON response with the following structure:
             from .utils import chat_with_json_fallback  # type: ignore
         except Exception:
             from utils import chat_with_json_fallback  # type: ignore
-        content, tokens = await chat_with_json_fallback(
-            self.client,
-            self.settings.openai_model,
-            messages,
-            int(self.settings.openai_max_tokens),
-            0.3,
-        )
-        return content, tokens
+        models = self.model_failover.iteration_order()
+        last_invalid_exc: Exception | None = None
+        for model_name in models:
+            try:
+                resp_content, tokens = await chat_with_json_fallback(
+                    self.client,
+                    model_name,
+                    messages,
+                    int(self.settings.openai_max_tokens),
+                    0.3,
+                )
+                if self.model_failover.current != model_name:
+                    logger.info("SummarizationService switched to model %s", model_name)
+                self.model_failover.record_success(model_name)
+                return resp_content, tokens
+            except Exception as exc:
+                if not is_invalid_model_error(exc):
+                    raise
+                last_invalid_exc = exc
+                logger.warning(
+                    "Model %s rejected API request (%s); trying fallback",
+                    model_name,
+                    exc,
+                )
+                self.model_failover.mark_unavailable(model_name)
+                continue
+        if last_invalid_exc:
+            raise last_invalid_exc
+        raise RuntimeError("No configured OpenAI models available")
     
     async def process_batch_summaries(self, article_ids: List[int], force_refresh: bool = False) -> BatchSummaryResponse:
         """
